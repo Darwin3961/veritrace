@@ -1,3 +1,4 @@
+import locale
 import os
 import shlex
 import subprocess
@@ -31,6 +32,82 @@ def test_successful_command_captures_stdout(tmp_path: Path):
     assert result.metadata["exit_code"] == 0
     assert "hello" in result.output
     assert result.metadata["timeout"] is False
+
+
+def test_utf8_byte_output_is_decoded(tmp_path: Path):
+    executor = CommandExecutor(tmp_path)
+    code = (
+        "import sys; "
+        "sys.stdout.buffer.write('你好 UTF-8'.encode('utf-8'))"
+    )
+
+    result = executor.run_command(
+        "call-utf8-bytes",
+        python_command("-c", code),
+    )
+
+    assert result.ok is True
+    assert result.output == "你好 UTF-8"
+
+
+def test_output_encodings_include_runtime_platform_fallbacks(tmp_path: Path):
+    executor = CommandExecutor(tmp_path)
+    encodings = {
+        encoding.casefold()
+        for encoding in executor._output_encodings()
+    }
+
+    assert executor._output_encodings()[0] == "utf-8"
+    assert locale.getpreferredencoding(False).casefold() in encodings
+    if os.name == "nt":
+        assert {"oem", "mbcs", "gb18030"} <= encodings
+
+
+def test_local_encoded_stderr_uses_platform_fallback(
+    monkeypatch,
+    tmp_path: Path,
+):
+    executor = CommandExecutor(tmp_path)
+    message = "系统找不到指定的路径"
+    monkeypatch.setattr(
+        executor,
+        "_output_encodings",
+        lambda: ("utf-8", "gb18030"),
+    )
+    code = (
+        "import sys; "
+        f"sys.stderr.buffer.write({message!r}.encode('gb18030')); "
+        "sys.exit(1)"
+    )
+
+    result = executor.run_command(
+        "call-local-stderr",
+        python_command("-c", code),
+    )
+
+    assert result.ok is False
+    assert result.error == message
+
+
+def test_invalid_output_bytes_fall_back_without_crashing(
+    monkeypatch,
+    tmp_path: Path,
+):
+    executor = CommandExecutor(tmp_path)
+    monkeypatch.setattr(
+        executor,
+        "_output_encodings",
+        lambda: ("utf-8",),
+    )
+    code = "import sys; sys.stdout.buffer.write(bytes([255, 254, 250]))"
+
+    result = executor.run_command(
+        "call-invalid-bytes",
+        python_command("-c", code),
+    )
+
+    assert result.ok is True
+    assert result.output == "\ufffd\ufffd\ufffd"
 
 
 def test_command_runs_in_workspace(tmp_path: Path):

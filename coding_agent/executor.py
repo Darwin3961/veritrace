@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import locale
 import os
 import signal
 import subprocess
@@ -71,14 +72,52 @@ class CommandExecutor:
 
         return result, True, omitted
 
+    def _output_encodings(self) -> tuple[str, ...]:
+        encodings = ["utf-8"]
+        preferred = locale.getpreferredencoding(False)
+
+        if os.name == "nt":
+            encodings.append("oem")
+
+        if preferred:
+            encodings.append(preferred)
+
+        if os.name == "nt":
+            encodings.extend(("mbcs", "gb18030"))
+
+        unique: list[str] = []
+        seen: set[str] = set()
+        for encoding in encodings:
+            normalized = encoding.casefold()
+            if normalized not in seen:
+                unique.append(encoding)
+                seen.add(normalized)
+
+        return tuple(unique)
+
+    def _decode_output(
+        self,
+        value: bytes | str | None,
+    ) -> str:
+        if value is None:
+            return ""
+
+        if isinstance(value, str):
+            return value
+
+        for encoding in self._output_encodings():
+            try:
+                return value.decode(encoding)
+            except (LookupError, UnicodeDecodeError):
+                continue
+
+        return value.decode("utf-8", errors="replace")
+
     def _popen_kwargs(self) -> dict:
         kwargs = {
             "cwd": str(self.workspace_root),
             "stdout": subprocess.PIPE,
             "stderr": subprocess.PIPE,
-            "text": True,
-            "encoding": "utf-8",
-            "errors": "replace",
             "shell": True,
         }
 
@@ -190,10 +229,10 @@ class CommandExecutor:
             )
 
             stdout, stdout_truncated, stdout_omitted = (
-                self._truncate(stdout or "")
+                self._truncate(self._decode_output(stdout))
             )
             stderr, stderr_truncated, stderr_omitted = (
-                self._truncate(stderr or "")
+                self._truncate(self._decode_output(stderr))
             )
 
             ok = process.returncode == 0
@@ -224,18 +263,18 @@ class CommandExecutor:
             try:
                 stdout, stderr = process.communicate(timeout=5)
             except subprocess.SubprocessError:
-                stdout = ""
-                stderr = ""
+                stdout = b""
+                stderr = b""
 
             duration_ms = int(
                 (time.monotonic() - started) * 1000
             )
 
             stdout, stdout_truncated, stdout_omitted = (
-                self._truncate(stdout or "")
+                self._truncate(self._decode_output(stdout))
             )
             stderr, stderr_truncated, stderr_omitted = (
-                self._truncate(stderr or "")
+                self._truncate(self._decode_output(stderr))
             )
 
             return ToolResult(

@@ -10,7 +10,7 @@ from coding_agent.model import (
     ModelAdapter,
     ModelResponseError,
 )
-from coding_agent.prompts import SYSTEM_PROMPT
+from coding_agent.prompts import SYSTEM_PROMPT, build_runtime_prompt
 from coding_agent.registry import ToolRegistry
 from coding_agent.session import SessionTrace
 from coding_agent.types import AgentResponse
@@ -139,7 +139,10 @@ class AgentLoop:
         )
 
         context = ConversationContext(
-            self.system_prompt
+            build_runtime_prompt(
+                self.system_prompt,
+                self.tools.workspace_root,
+            )
         )
         context.add_user(task)
 

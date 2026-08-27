@@ -344,10 +344,9 @@ def test_conversation_and_tool_schemas_are_sent_to_model(tmp_path: Path):
     agent.run("Inspect missing.py")
 
     messages = model.calls[1]["messages"]
-    assert messages[0] == {
-        "role": "system",
-        "content": "Test system prompt",
-    }
+    assert messages[0]["role"] == "system"
+    assert messages[0]["content"].startswith("Test system prompt\n\n")
+    assert f"Workspace root: {tmp_path.resolve()}" in messages[0]["content"]
     assert messages[1] == {
         "role": "user",
         "content": "Inspect missing.py",

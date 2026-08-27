@@ -200,9 +200,10 @@ class ToolRegistry:
         self.file_tools = WorkspaceTools(
             workspace_root
         )
+        self.workspace_root = self.file_tools.workspace_root
 
         self.command_executor = CommandExecutor(
-            workspace_root,
+            self.workspace_root,
             default_timeout=command_timeout,
             max_output_chars=max_command_output,
         )

@@ -6,6 +6,7 @@ import shlex
 import subprocess
 import sys
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -67,6 +68,7 @@ class RecordingTools:
     def __init__(self):
         self.executed = []
         self.schemas = []
+        self.workspace_root = Path.cwd()
 
     def execute(self, call):
         self.executed.append(call)

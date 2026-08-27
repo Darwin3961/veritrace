@@ -1,3 +1,10 @@
+from __future__ import annotations
+
+import platform
+import sys
+from pathlib import Path
+
+
 SYSTEM_PROMPT = """You are a local coding agent operating inside one project workspace.
 
 Your job is to complete the user's programming task by inspecting the repository,
@@ -21,3 +28,25 @@ Rules:
 
 You have no server-side file system or code execution capability. All actions must be performed through the provided local tools.
 """
+
+
+def build_runtime_prompt(
+    base_prompt: str,
+    workspace_root: str | Path,
+) -> str:
+    """Add local runtime facts without introducing provider-specific details."""
+    workspace = Path(workspace_root).expanduser().resolve()
+    system_name = platform.system() or "Unknown"
+    platform_description = platform.platform() or system_name
+
+    runtime_context = f"""Runtime environment:
+
+- Current platform: {system_name} ({sys.platform}; {platform_description})
+- Workspace root: {workspace}
+- run_command automatically executes with the workspace root as its current working directory.
+- Do not prepend cd or guess another workspace path; pass the intended command directly.
+- Use commands compatible with the current platform. Do not assume utilities such as pwd are available.
+- Prefer cross-platform verification commands such as python -m pytest -q when appropriate.
+"""
+
+    return base_prompt.rstrip() + "\n\n" + runtime_context
