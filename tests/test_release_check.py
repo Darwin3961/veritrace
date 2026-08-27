@@ -4,7 +4,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.release_check import REQUIRED_FILES, ReleaseChecker
+from scripts.release_check import (
+    REQUIRED_FILES,
+    CheckResult,
+    ReleaseChecker,
+    print_results,
+)
 
 
 REMOTE = "https://github.com/Darwin3961/coding-agent.git"
@@ -188,3 +193,15 @@ def test_non_git_directory_fails_clearly(tmp_path: Path):
     assert results["working tree clean"].passed is False
     assert results["branch"].passed is False
     assert results["origin URL"].passed is False
+
+
+def test_report_output_is_ascii_safe(capsys):
+    print_results([
+        CheckResult("example", True, "details"),
+        CheckResult("failure", False),
+    ])
+
+    assert capsys.readouterr().out == (
+        "[PASS] example: details\n"
+        "[FAIL] failure\n"
+    )

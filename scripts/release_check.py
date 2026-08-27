@@ -302,7 +302,7 @@ class ReleaseChecker:
 def print_results(results: list[CheckResult]) -> None:
     for result in results:
         label = "PASS" if result.passed else "FAIL"
-        suffix = f" — {result.detail}" if result.detail else ""
+        suffix = f": {result.detail}" if result.detail else ""
         print(f"[{label}] {result.name}{suffix}")
 
 
