@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.syntax import Syntax
+from rich.table import Table
 from rich.text import Text
 
 from coding_agent.events import Event
 from coding_agent.git_utils import GitSummary
+from coding_agent.verification import VerificationSummary
 
 
 class RichRenderer:
@@ -251,3 +254,123 @@ class RichRenderer:
                     border_style="magenta",
                 )
             )
+
+    def render_final(
+        self,
+        *,
+        result: str,
+        metrics: dict,
+        stop_reason: str | None,
+        verification: VerificationSummary,
+        git_summary: GitSummary | None,
+        trace_path: Path | None,
+    ) -> None:
+        self.console.print(
+            Panel(
+                Text(result),
+                title="Result",
+                border_style="green",
+            )
+        )
+
+        verification_table = Table(
+            title="Verification",
+            show_header=False,
+            box=None,
+        )
+        verification_table.add_column(style="bold")
+        verification_table.add_column()
+        verification_table.add_row(
+            Text("Commands"),
+            Text(
+                f"{verification.successful_commands} succeeded, "
+                f"{verification.failed_commands} failed, "
+                f"{verification.timed_out_commands} timed out"
+            ),
+        )
+        verification_table.add_row(
+            Text("File changes"),
+            Text(str(verification.successful_file_changes)),
+        )
+        verification_table.add_row(
+            Text("Tool failures"),
+            Text(str(verification.tool_failures)),
+        )
+        verification_table.add_row(
+            Text("Policy blocks"),
+            Text(str(verification.policy_blocks)),
+        )
+
+        if verification.tests_likely_ran:
+            test_status = (
+                f"{verification.successful_test_commands} succeeded, "
+                f"{verification.failed_test_commands} failed"
+            )
+        else:
+            test_status = "No explicit test command detected"
+
+        verification_table.add_row(
+            Text("Test commands"),
+            Text(test_status),
+        )
+
+        ordinary_successes = max(
+            0,
+            verification.successful_commands
+            - verification.successful_test_commands,
+        )
+        verification_table.add_row(
+            Text("Ordinary command successes"),
+            Text(str(ordinary_successes)),
+        )
+        self.console.print(verification_table)
+
+        if verification.verification_commands:
+            commands = "\n".join(
+                self._truncate(command)
+                for command in verification.verification_commands
+            )
+            self.console.print(
+                Panel(
+                    Text(commands),
+                    title="Executed commands",
+                    border_style="blue",
+                )
+            )
+
+        metric_order = (
+            "steps",
+            "model_calls",
+            "model_errors",
+            "tool_calls",
+            "tool_failures",
+            "policy_blocks",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "duration_ms",
+        )
+        metric_text = " ".join(
+            f"{name}={metrics[name]}"
+            for name in metric_order
+            if name in metrics
+        )
+        self.console.print(
+            Text(
+                f"Metrics: {metric_text}",
+                style="dim",
+            )
+        )
+
+        if stop_reason:
+            self.console.print(
+                Text(f"Stop reason: {stop_reason}", style="dim")
+            )
+
+        if trace_path is not None:
+            self.console.print(
+                Text(f"Trace: {trace_path}", style="dim")
+            )
+
+        if git_summary is not None:
+            self.render_git_summary(git_summary)

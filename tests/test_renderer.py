@@ -7,8 +7,10 @@ import pytest
 from rich.console import Console
 
 from coding_agent.events import Event
+from coding_agent.git_utils import GitSummary
 from coding_agent.renderer import RichRenderer
 from coding_agent.session import SessionTrace
+from coding_agent.verification import VerificationSummary
 
 
 def make_renderer(**kwargs):
@@ -320,3 +322,71 @@ def test_renderer_exception_does_not_affect_session_trace(tmp_path):
 def test_invalid_renderer_output_limit_is_rejected():
     with pytest.raises(ValueError, match="at least 100"):
         RichRenderer(max_output_chars=99)
+
+
+def test_final_summary_is_markup_safe_and_does_not_invent_tests(tmp_path):
+    renderer, stream = make_renderer()
+    injected = "[bold red]FINAL[/bold red]"
+
+    renderer.render_final(
+        result=injected,
+        metrics={
+            "steps": 2,
+            "model_calls": 2,
+            "tool_calls": 1,
+            "duration_ms": 5,
+        },
+        stop_reason="completed",
+        verification=VerificationSummary(
+            successful_commands=1,
+            verification_commands=["python hello.py"],
+        ),
+        git_summary=GitSummary(is_repo=True),
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    output = stream.getvalue()
+    assert injected in output
+    assert "Result" in output
+    assert "Verification" in output
+    assert "No explicit test command detected" in output
+    assert "Ordinary command successes" in output
+    assert "python hello.py" in output
+    assert "Metrics: steps=2 model_calls=2 tool_calls=1 duration_ms=5" in output
+    assert "Stop reason: completed" in output
+    assert f"Trace: {tmp_path / 'trace.jsonl'}" in output
+    assert "Git: no workspace changes" in output
+    assert "All tests passed" not in output
+
+
+@pytest.mark.parametrize(
+    ("successful", "failed", "expected"),
+    [
+        (1, 0, "1 succeeded, 0 failed"),
+        (0, 1, "0 succeeded, 1 failed"),
+    ],
+)
+def test_final_summary_reports_observed_test_command_outcomes(
+    successful,
+    failed,
+    expected,
+):
+    renderer, stream = make_renderer()
+
+    renderer.render_final(
+        result="Done.",
+        metrics={},
+        stop_reason="completed",
+        verification=VerificationSummary(
+            successful_commands=successful,
+            failed_commands=failed,
+            tests_likely_ran=True,
+            successful_test_commands=successful,
+            failed_test_commands=failed,
+            verification_commands=["pytest"],
+        ),
+        git_summary=None,
+        trace_path=None,
+    )
+
+    assert expected in stream.getvalue()

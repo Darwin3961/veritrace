@@ -62,6 +62,7 @@ class AgentLoop:
         self.last_trace_path: Path | None = None
         self.last_metrics: dict[str, Any] | None = None
         self.last_stop_reason: str | None = None
+        self.last_events: list[Event] = []
 
     def _tool_fingerprint(
         self,
@@ -103,6 +104,7 @@ class AgentLoop:
         self.last_metrics = metrics
         self.last_stop_reason = stop_reason
         self.last_trace_path = session.path
+        self.last_events = session.events
 
         return final_answer
 
@@ -121,6 +123,7 @@ class AgentLoop:
         self.last_trace_path = None
         self.last_metrics = None
         self.last_stop_reason = None
+        self.last_events = []
 
         session.emit(
             "session_start",

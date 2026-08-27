@@ -152,6 +152,13 @@ def test_final_only_trace_has_complete_event_flow(tmp_path):
     assert agent.last_metrics["prompt_tokens"] == 8
     assert agent.last_metrics["completion_tokens"] == 2
     assert agent.last_metrics["total_tokens"] == 10
+    assert [event.type for event in agent.last_events] == [
+        "session_start",
+        "user_task",
+        "step_start",
+        "assistant_response",
+        "session_end",
+    ]
 
 
 def test_tool_events_pair_and_success_metrics_are_recorded(tmp_path):
@@ -399,6 +406,7 @@ def test_unexpected_model_exception_is_traced_then_reraised(tmp_path):
     events = load_events(agent.last_trace_path)
     assert events[-1]["type"] == "session_end"
     assert events[-1]["data"]["stop_reason"] == "exception"
+    assert agent.last_events[-1].type == "session_end"
 
 
 def test_write_run_final_jsonl_integration_redacts_and_truncates(tmp_path):
