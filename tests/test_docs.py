@@ -82,3 +82,5 @@ def test_readme_marks_unimplemented_features_as_limitations():
 def test_architecture_and_demo_documents_exist():
     assert (ROOT / "docs/ARCHITECTURE.md").is_file()
     assert (ROOT / "docs/DEMO.md").is_file()
+    assert (ROOT / "docs/VIDEO_SCRIPT.md").is_file()
+    assert (ROOT / "docs/INTERVIEW_NOTES.md").is_file()
