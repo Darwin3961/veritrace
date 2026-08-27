@@ -33,6 +33,16 @@ class SessionTrace:
             r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}\b",
             re.IGNORECASE,
         ),
+        re.compile(
+            r"(?<![A-Za-z0-9_])"
+            r"(?:\"|')?"
+            r"(?:api[_-]?key|token|secret|password|authorization)"
+            r"(?:\"|')?"
+            r"(?![A-Za-z0-9_])"
+            r"\s*[:=]\s*"
+            r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,\r\n]+)",
+            re.IGNORECASE,
+        ),
     ]
 
     def __init__(

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
+import shlex
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 @dataclass(slots=True)
@@ -24,6 +26,42 @@ class GitInspector:
         ("diff", "--no-ext-diff", "--"),
         ("diff", "--cached", "--stat"),
         ("diff", "--cached", "--no-ext-diff", "--"),
+    }
+
+    SECRET_VALUE_PATTERNS = [
+        re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
+        re.compile(
+            r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}\b",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?<![A-Za-z0-9_])"
+            r"(?:\"|')?"
+            r"(?:api[_-]?key|token|secret|password|authorization)"
+            r"(?:\"|')?"
+            r"(?![A-Za-z0-9_])"
+            r"\s*[:=]\s*"
+            r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,\r\n]+)",
+            re.IGNORECASE,
+        ),
+    ]
+
+    SENSITIVE_FILE_NAMES = {
+        ".env",
+        ".npmrc",
+        ".pypirc",
+        "credentials.json",
+        "credentials.yml",
+        "credentials.yaml",
+        "id_rsa",
+        "id_ed25519",
+    }
+
+    SENSITIVE_FILE_SUFFIXES = {
+        ".pem",
+        ".key",
+        ".p12",
+        ".pfx",
     }
 
     def __init__(
@@ -126,6 +164,66 @@ class GitInspector:
 
         return result
 
+    def _is_sensitive_diff_header(self, line: str) -> bool:
+        try:
+            parts = shlex.split(line)
+        except ValueError:
+            return False
+
+        if len(parts) < 4 or parts[:2] != ["diff", "--git"]:
+            return False
+
+        path = parts[3]
+
+        if path.startswith("b/"):
+            path = path[2:]
+
+        parsed = PurePosixPath(path)
+        basename = parsed.name.lower()
+
+        if basename == ".env.example":
+            return False
+
+        if basename in self.SENSITIVE_FILE_NAMES:
+            return True
+
+        if basename.startswith(".env."):
+            return True
+
+        return parsed.suffix.lower() in self.SENSITIVE_FILE_SUFFIXES
+
+    def _redact_sensitive_diff_sections(self, text: str) -> str:
+        lines = text.splitlines(keepends=True)
+        result: list[str] = []
+        redacting = False
+
+        for line in lines:
+            if line.startswith("diff --git "):
+                redacting = self._is_sensitive_diff_header(
+                    line.rstrip("\r\n")
+                )
+                result.append(line)
+
+                if redacting:
+                    result.append(
+                        "... <sensitive file diff redacted> ...\n"
+                    )
+
+                continue
+
+            if not redacting:
+                result.append(line)
+
+        return "".join(result)
+
+    def _redact(self, text: str) -> str:
+        result = self._redact_sensitive_diff_sections(text)
+
+        for pattern in self.SECRET_VALUE_PATTERNS:
+            result = pattern.sub("[REDACTED]", result)
+
+        return result
+
     def _combine(
         self,
         unstaged: str,
@@ -193,6 +291,7 @@ class GitInspector:
             outputs["unstaged_diff"],
             outputs["staged_diff"],
         )
+        diff_text = self._redact(diff_text)
 
         return GitSummary(
             is_repo=True,

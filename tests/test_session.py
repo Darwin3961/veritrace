@@ -115,6 +115,24 @@ def test_bearer_value_is_redacted(tmp_path):
     assert event.data["message"] == "[REDACTED]"
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "API_KEY=fake-value",
+        "token: fake-value",
+        '"password": "fake-value"',
+        "Authorization='fake-value'",
+    ],
+)
+def test_secret_assignment_value_is_redacted(tmp_path, value):
+    trace = SessionTrace(tmp_path, enabled=False)
+
+    event = trace.emit("test", data={"message": value})
+
+    assert "fake-value" not in event.data["message"]
+    assert "[REDACTED]" in event.data["message"]
+
+
 def test_ordinary_code_string_is_preserved(tmp_path):
     trace = SessionTrace(tmp_path, enabled=False)
     code = "def parse_token(value):\n    return value.strip()\n"

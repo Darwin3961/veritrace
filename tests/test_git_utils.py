@@ -35,7 +35,7 @@ def commit_file(
 ) -> Path:
     path = workspace / name
     path.write_text(content, encoding="utf-8")
-    run_git(workspace, "add", name)
+    run_git(workspace, "add", "-f", name)
     run_git(
         workspace,
         "-c",
@@ -155,6 +155,53 @@ def test_diff_is_truncated_with_head_and_tail(tmp_path):
     assert "HEAD" in summary.diff_text
     assert "TAIL" in summary.diff_text
     assert len(summary.diff_text) <= 500
+
+
+@pytest.mark.parametrize(
+    "changed_content",
+    [
+        "API_KEY=fake-value\n",
+        "token: fake-value\n",
+        "value = 'sk-FAKE_TEST_VALUE'\n",
+        "Authorization=Bearer FAKE.TEST.VALUE\n",
+    ],
+)
+def test_diff_secret_values_are_redacted(tmp_path, changed_content):
+    init_repo(tmp_path)
+    path = commit_file(tmp_path, content="value = 'safe'\n")
+    path.write_text(changed_content, encoding="utf-8")
+
+    summary = GitInspector(tmp_path).inspect()
+
+    assert "fake-value" not in summary.diff_text
+    assert "sk-FAKE_TEST_VALUE" not in summary.diff_text
+    assert "Bearer FAKE.TEST.VALUE" not in summary.diff_text
+    assert "[REDACTED]" in summary.diff_text
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".env",
+        ".env.local",
+        "private.pem",
+        "private.key",
+    ],
+)
+def test_sensitive_file_diff_content_is_fully_redacted(tmp_path, name):
+    init_repo(tmp_path)
+    path = commit_file(
+        tmp_path,
+        name=name,
+        content="OLD_FAKE_PRIVATE_VALUE\n",
+    )
+    path.write_text("NEW_FAKE_PRIVATE_VALUE\n", encoding="utf-8")
+
+    summary = GitInspector(tmp_path).inspect()
+
+    assert "OLD_FAKE_PRIVATE_VALUE" not in summary.diff_text
+    assert "NEW_FAKE_PRIVATE_VALUE" not in summary.diff_text
+    assert "sensitive file diff redacted" in summary.diff_text
 
 
 def test_git_missing_returns_safe_error(tmp_path, monkeypatch):
