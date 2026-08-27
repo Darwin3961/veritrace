@@ -192,13 +192,16 @@ def main() -> int:
     ).expanduser().resolve()
 
     try:
+        model = ModelAdapter.from_env()
+
         renderer = (
             None
             if args.plain
-            else RichRenderer()
+            else RichRenderer(
+                workspace_root=workspace,
+                model_name=getattr(model, "model_name", None),
+            )
         )
-
-        model = ModelAdapter.from_env()
 
         tools = ToolRegistry(
             workspace

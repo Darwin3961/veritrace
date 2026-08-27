@@ -332,10 +332,10 @@ def test_renderer_shows_clean_and_changed_git_summaries():
     )
 
     output = stream.getvalue()
-    assert "Git: no workspace changes" in output
-    assert "Git status" in output
+    assert "Workspace clean" in output
+    assert "Workspace changes" in output
     assert "M app.py" in output
-    assert "Git diff stat" in output
+    assert "Diff summary" in output
     assert "+safe change" in output
 
 

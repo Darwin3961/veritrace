@@ -144,13 +144,16 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
     assert trace_events[-1]["type"] == "session_end"
 
     output = stream.getvalue()
-    assert "Task" in output
-    assert "write_file" in output
-    assert "run_command" in output
+    assert "› Implement add(a, b) with a pytest test" in output
+    assert "Write  calc.py" in output
+    assert "Write  tests/test_calc.py" in output
+    assert "$ " in output
     assert "1 passed" in output
-    assert "Result" in output
+    assert "✓ Task completed" in output
     assert "Verification" in output
-    assert "1 succeeded, 0 failed" in output
-    assert "Metrics:" in output
-    assert "Trace:" in output
-    assert "Git status" in output
+    assert "✓ 1 succeeded" in output
+    assert "4 steps · 4 model calls · 3 tools" in output
+    assert "trace  " in output
+    assert "Workspace changes" in output
+    assert "Coding Agent Session" not in output
+    assert "╭" not in output

@@ -10,9 +10,11 @@ from coding_agent.git_utils import GitSummary
 
 
 class FakeModelAdapter:
+    model_name = "fake-model"
+
     @classmethod
     def from_env(cls):
-        return "fake-model"
+        return cls()
 
 
 class FakeToolRegistry:
@@ -110,7 +112,8 @@ class FakeAgentLoop:
 class FakeRenderer:
     instances = []
 
-    def __init__(self):
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
         self.events = []
         self.final_calls = []
         self.__class__.instances.append(self)
@@ -187,6 +190,8 @@ def test_cli_default_uses_rich_event_sink_and_final_render(
     assert final["verification"].successful_test_commands == 1
     assert final["git_summary"] is FakeGitInspector.summary
     assert final["trace_path"].name == "session.jsonl"
+    assert renderer.kwargs["workspace_root"] == tmp_path.resolve()
+    assert renderer.kwargs["model_name"] == "fake-model"
 
 
 def test_cli_reads_task_from_input(monkeypatch, tmp_path: Path):
@@ -252,6 +257,7 @@ def test_cli_plain_mode_prints_complete_summary(
     assert "M app.py" in output
     assert "Git diff stat:" in output
     assert "Git diff:" in output
+    assert "\x1b[" not in output
 
 
 def test_cli_no_diff_skips_git_inspector(monkeypatch, tmp_path: Path):
