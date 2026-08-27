@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from coding_agent.executor import CommandExecutor
+from coding_agent.policy import SafetyPolicy
 from coding_agent.tools import WorkspaceTools
 from coding_agent.types import ToolCall, ToolResult
 
@@ -194,6 +195,7 @@ class ToolRegistry:
         *,
         command_timeout: int = 30,
         max_command_output: int = 10_000,
+        policy: SafetyPolicy | None = None,
     ):
         self.file_tools = WorkspaceTools(
             workspace_root
@@ -203,6 +205,12 @@ class ToolRegistry:
             workspace_root,
             default_timeout=command_timeout,
             max_output_chars=max_command_output,
+        )
+
+        self.policy = (
+            policy
+            if policy is not None
+            else SafetyPolicy(workspace_root)
         )
 
         self._handlers: dict[
@@ -235,6 +243,23 @@ class ToolRegistry:
                 tool_name=call.name,
                 ok=False,
                 error=f"unknown tool: {call.name}",
+            )
+
+        decision = self.policy.check(call)
+
+        if not decision.allowed:
+            return ToolResult(
+                call_id=call.id,
+                tool_name=call.name,
+                ok=False,
+                error=(
+                    "policy blocked tool call: "
+                    f"{decision.reason}"
+                ),
+                metadata={
+                    "policy_blocked": True,
+                    "policy_risk": decision.risk,
+                },
             )
 
         try:

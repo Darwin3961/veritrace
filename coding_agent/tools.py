@@ -25,6 +25,24 @@ class WorkspaceTools:
         "build",
     }
 
+    SENSITIVE_FILE_NAMES = {
+        ".env",
+        ".npmrc",
+        ".pypirc",
+        "credentials.json",
+        "credentials.yml",
+        "credentials.yaml",
+        "id_rsa",
+        "id_ed25519",
+    }
+
+    SENSITIVE_FILE_SUFFIXES = {
+        ".pem",
+        ".key",
+        ".p12",
+        ".pfx",
+    }
+
     MAX_SEARCH_FILE_SIZE = 1_000_000
 
     def __init__(self, workspace_root: str | Path):
@@ -93,6 +111,20 @@ class WorkspaceTools:
 
         return relative.as_posix()
 
+    def _is_sensitive_file(self, path: Path) -> bool:
+        basename = path.name.lower()
+
+        if basename == ".env.example":
+            return False
+
+        if basename in self.SENSITIVE_FILE_NAMES:
+            return True
+
+        if basename.startswith(".env."):
+            return True
+
+        return path.suffix.lower() in self.SENSITIVE_FILE_SUFFIXES
+
     def _iter_files(self, base: Path) -> Iterator[Path]:
         for directory, dirnames, filenames in os.walk(base, followlinks=False):
             dirnames[:] = sorted(
@@ -103,6 +135,9 @@ class WorkspaceTools:
 
             for filename in sorted(filenames):
                 path = Path(directory) / filename
+
+                if self._is_sensitive_file(path):
+                    continue
 
                 try:
                     relative = path.relative_to(self.workspace_root)
@@ -170,6 +205,9 @@ class WorkspaceTools:
 
                 for filename in sorted(filenames):
                     candidate = current / filename
+
+                    if self._is_sensitive_file(candidate):
+                        continue
 
                     try:
                         relative = candidate.relative_to(self.workspace_root)
@@ -340,6 +378,14 @@ class WorkspaceTools:
                 )
 
             file_path = self._resolve_path(path)
+
+            if self._is_sensitive_file(file_path):
+                return self._error(
+                    call_id,
+                    tool_name,
+                    "access to sensitive credential files is not allowed",
+                    path=path,
+                )
 
             if not file_path.is_file():
                 return self._error(
