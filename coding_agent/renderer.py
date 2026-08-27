@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import difflib
 import platform
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -53,6 +55,17 @@ def sanitize_display_path(
 class RichRenderer:
     """Render sanitized agent events without affecting agent execution."""
 
+    DIFF_STAT_PATTERN = re.compile(
+        r"(?P<files>\d+) files? changed"
+        r"(?:, (?P<insertions>\d+) insertions?\(\+\))?"
+        r"(?:, (?P<deletions>\d+) deletions?\(-\))?"
+    )
+
+    SMALL_EDIT_LINES = 12
+    LARGE_EDIT_LINES = 40
+    PATCH_PREVIEW_CHARS = 1200
+    PATCH_LINE_CHARS = 180
+
     TOOL_ACTIONS = {
         "list_files": "List files",
         "search_code": "Search",
@@ -92,6 +105,7 @@ class RichRenderer:
             else unicode_symbols
         )
         self._tool_presentations: dict[int, tuple[str, str | None]] = {}
+        self._pending_edits: dict[str, tuple[str, str, str]] = {}
 
     def _supports_unicode(self) -> bool:
         encoding = getattr(self.console, "encoding", None) or "utf-8"
@@ -246,6 +260,24 @@ class RichRenderer:
         label, command = self._tool_presentation(name, arguments)
         self._tool_presentations[event.seq] = (label, command)
 
+        if name == "edit_file":
+            call_id = event.data.get("call_id")
+            path = arguments.get("path")
+            old_text = arguments.get("old_text")
+            new_text = arguments.get("new_text")
+
+            if (
+                isinstance(call_id, str)
+                and isinstance(path, str)
+                and isinstance(old_text, str)
+                and isinstance(new_text, str)
+            ):
+                self._pending_edits[call_id] = (
+                    path,
+                    old_text,
+                    new_text,
+                )
+
         line = Text(f"{self._symbol('bullet')} ", style="cyan")
         line.append(label, style="bold cyan")
         self.console.print(line)
@@ -263,6 +295,166 @@ class RichRenderer:
             rendered.append(line, style=style)
             self.console.print(rendered)
 
+    def _truncate_patch_line(self, value: str, max_chars: int) -> str:
+        if len(value) <= max_chars:
+            return value
+
+        marker_reserve = 40
+        available = max(max_chars - marker_reserve, 2)
+        head = available // 2
+        tail = available - head
+        omitted = len(value) - head - tail
+        marker = f"... <{omitted} chars omitted> ..."
+        result = value[:head] + marker + value[-tail:]
+
+        if len(result) > max_chars:
+            overflow = len(result) - max_chars
+            tail = max(1, tail - overflow)
+            omitted = len(value) - head - tail
+            marker = f"... <{omitted} chars omitted> ..."
+            result = value[:head] + marker + value[-tail:]
+
+        return result
+
+    def _edit_changes(
+        self,
+        old_text: str,
+        new_text: str,
+    ) -> list[tuple[str, str]]:
+        changes: list[tuple[str, str]] = []
+        old_lines = old_text.splitlines()
+        new_lines = new_text.splitlines()
+        matcher = difflib.SequenceMatcher(
+            a=old_lines,
+            b=new_lines,
+            autojunk=False,
+        )
+
+        for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
+            if tag == "equal":
+                continue
+
+            if tag in {"replace", "delete"}:
+                changes.extend(
+                    ("-", line)
+                    for line in old_lines[old_start:old_end]
+                )
+
+            if tag in {"replace", "insert"}:
+                changes.extend(
+                    ("+", line)
+                    for line in new_lines[new_start:new_end]
+                )
+
+        return changes
+
+    def _render_patch_lines(
+        self,
+        changes: list[tuple[str, str]],
+        *,
+        max_line_chars: int,
+    ) -> None:
+        for prefix, source_line in changes:
+            style = "dim red" if prefix == "-" else "dim green"
+            line = Text(f"  {prefix} ", style=style)
+            line.append(
+                self._truncate_patch_line(
+                    source_line,
+                    max_line_chars,
+                ),
+                style=style,
+            )
+            self.console.print(line)
+
+    def _render_edit_applied(
+        self,
+        pending_edit: tuple[str, str, str] | None,
+    ) -> None:
+        if pending_edit is None:
+            self.console.print(
+                Text(
+                    f"{self._symbol('success')} applied",
+                    style="bold green",
+                )
+            )
+            return
+
+        _path, old_text, new_text = pending_edit
+        changes = self._edit_changes(old_text, new_text)
+        deleted = sum(prefix == "-" for prefix, _line in changes)
+        added = sum(prefix == "+" for prefix, _line in changes)
+        changed_lines = len(changes)
+
+        if changed_lines > self.LARGE_EDIT_LINES:
+            self.console.print(
+                Text(
+                    f"{self._symbol('success')} applied · "
+                    f"{changed_lines} lines changed (+{added} -{deleted})",
+                    style="bold green",
+                )
+            )
+            self.console.print(
+                Text(
+                    "  preview omitted for a large edit",
+                    style="dim",
+                )
+            )
+            return
+
+        if changed_lines <= self.SMALL_EDIT_LINES:
+            max_line_chars = self.PATCH_LINE_CHARS
+            preview_chars = sum(
+                len(
+                    self._truncate_patch_line(
+                        line,
+                        max_line_chars,
+                    )
+                )
+                + 4
+                for _prefix, line in changes
+            )
+
+            if preview_chars > self.PATCH_PREVIEW_CHARS and changes:
+                max_line_chars = max(
+                    40,
+                    self.PATCH_PREVIEW_CHARS // len(changes) - 4,
+                )
+
+            self._render_patch_lines(
+                changes,
+                max_line_chars=max_line_chars,
+            )
+            suffix = ""
+        else:
+            visible = changes[:6] + changes[-6:]
+            max_line_chars = max(
+                60,
+                self.PATCH_PREVIEW_CHARS // len(visible) - 8,
+            )
+            self._render_patch_lines(
+                visible[:6],
+                max_line_chars=min(max_line_chars, self.PATCH_LINE_CHARS),
+            )
+            omitted = changed_lines - len(visible)
+            omission = (
+                f"  … {omitted} changed lines omitted …"
+                if self.unicode_symbols
+                else f"  ... {omitted} changed lines omitted ..."
+            )
+            self.console.print(Text(omission, style="dim"))
+            self._render_patch_lines(
+                visible[6:],
+                max_line_chars=min(max_line_chars, self.PATCH_LINE_CHARS),
+            )
+            suffix = f" · {changed_lines} lines changed"
+
+        self.console.print(
+            Text(
+                f"{self._symbol('success')} applied{suffix}",
+                style="bold green",
+            )
+        )
+
     def _render_tool_result(self, event: Event) -> None:
         data = event.data
         name = str(data.get("tool_name", "tool"))
@@ -274,6 +466,14 @@ class RichRenderer:
 
         policy_blocked = bool(metadata.get("policy_blocked", False))
         timed_out = bool(metadata.get("timeout", False))
+        pending_edit = None
+
+        if name == "edit_file":
+            call_id = data.get("call_id")
+
+            if isinstance(call_id, str):
+                pending_edit = self._pending_edits.pop(call_id, None)
+
         label, _command = self._tool_presentations.pop(
             event.source_seq or -1,
             self._tool_presentation(name, {}),
@@ -312,6 +512,10 @@ class RichRenderer:
             return
 
         if ok:
+            if name == "edit_file":
+                self._render_edit_applied(pending_edit)
+                return
+
             completed = "Command completed" if name == "run_command" else label
             self.console.print(
                 Text(
@@ -333,6 +537,7 @@ class RichRenderer:
     def handle_event(self, event: Event) -> None:
         if event.type == "session_start":
             self._tool_presentations.clear()
+            self._pending_edits.clear()
             self._render_header()
             return
 
@@ -444,8 +649,16 @@ class RichRenderer:
 
         if summary.diff_stat:
             self.console.print()
-            self.console.print(Text("Diff summary", style="bold"))
-            self._print_indented(summary.diff_stat, style="dim")
+            compact_stats = self._compact_diff_stats(summary.diff_stat)
+
+            if compact_stats:
+                self.console.print(Text("Tracked diff", style="bold"))
+
+                for compact_stat in compact_stats:
+                    self._print_indented(compact_stat, style="dim")
+            else:
+                self.console.print(Text("Diff summary", style="bold"))
+                self._print_indented(summary.diff_stat, style="dim")
 
         if summary.diff_text:
             self.console.print()
@@ -458,6 +671,37 @@ class RichRenderer:
                     background_color="default",
                 )
             )
+
+    def _compact_diff_stats(self, diff_stat: str) -> list[str]:
+        compact: list[tuple[str | None, str]] = []
+        section: str | None = None
+
+        for raw_line in diff_stat.splitlines():
+            line = raw_line.strip()
+
+            if line in {"Unstaged:", "Staged:"}:
+                section = line[:-1]
+                continue
+
+            match = self.DIFF_STAT_PATTERN.fullmatch(line)
+
+            if match is None:
+                continue
+
+            files = int(match.group("files"))
+            insertions = int(match.group("insertions") or 0)
+            deletions = int(match.group("deletions") or 0)
+            file_label = "file" if files == 1 else "files"
+            value = f"{files} {file_label} changed · +{insertions} -{deletions}"
+            compact.append((section, value))
+
+        if len(compact) == 1:
+            return [compact[0][1]]
+
+        return [
+            f"{section}: {value}" if section else value
+            for section, value in compact
+        ]
 
     def _format_metrics(self, metrics: dict) -> str:
         parts: list[str] = []

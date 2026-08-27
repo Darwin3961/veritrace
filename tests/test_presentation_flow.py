@@ -62,8 +62,21 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
                             "path": "calc.py",
                             "content": (
                                 "def add(a, b):\n"
-                                "    return a + b\n"
+                                "    return a - b\n"
                             ),
+                        },
+                    )
+                ]
+            ),
+            AgentResponse(
+                tool_calls=[
+                    ToolCall(
+                        "fix-source",
+                        "edit_file",
+                        {
+                            "path": "calc.py",
+                            "old_text": "    return a - b",
+                            "new_text": "    return a + b",
                         },
                     )
                 ]
@@ -126,7 +139,7 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
         "def add"
     )
     assert (tmp_path / "tests" / "test_calc.py").exists()
-    assert verification.successful_file_changes == 2
+    assert verification.successful_file_changes == 3
     assert verification.successful_commands == 1
     assert verification.successful_test_commands == 1
     assert verification.failed_test_commands == 0
@@ -147,12 +160,16 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
     assert "› Implement add(a, b) with a pytest test" in output
     assert "Write  calc.py" in output
     assert "Write  tests/test_calc.py" in output
+    assert "Edit  calc.py" in output
+    assert "-     return a - b" in output
+    assert "+     return a + b" in output
+    assert "✓ applied" in output
     assert "$ " in output
     assert "1 passed" in output
     assert "✓ Task completed" in output
     assert "Verification" in output
     assert "✓ 1 succeeded" in output
-    assert "4 steps · 4 model calls · 3 tools" in output
+    assert "5 steps · 5 model calls · 4 tools" in output
     assert "trace  " in output
     assert "Workspace changes" in output
     assert "Coding Agent Session" not in output

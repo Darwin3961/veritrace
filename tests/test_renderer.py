@@ -43,6 +43,52 @@ def make_event(
     )
 
 
+def edit_call(
+    seq: int,
+    call_id: str,
+    *,
+    path: str = "calc.py",
+    old_text: str = "return a - b",
+    new_text: str = "return a + b",
+) -> Event:
+    return make_event(
+        "tool_call",
+        seq=seq,
+        data={
+            "call_id": call_id,
+            "name": "edit_file",
+            "arguments": {
+                "path": path,
+                "old_text": old_text,
+                "new_text": new_text,
+            },
+        },
+    )
+
+
+def edit_result(
+    seq: int,
+    call_id: str,
+    *,
+    source_seq: int,
+    ok: bool,
+    error: str | None = None,
+    policy_blocked: bool = False,
+) -> Event:
+    return make_event(
+        "tool_result",
+        seq=seq,
+        source_seq=source_seq,
+        data={
+            "call_id": call_id,
+            "tool_name": "edit_file",
+            "ok": ok,
+            "error": error,
+            "metadata": {"policy_blocked": policy_blocked},
+        },
+    )
+
+
 def test_session_header_is_compact_and_ignores_private_event_data(tmp_path):
     renderer, stream = make_renderer(
         workspace_root=tmp_path,
@@ -157,6 +203,243 @@ def test_write_and_edit_calls_hide_file_content_and_replacement(name):
     assert hidden not in output
     assert "old_text" not in output
     assert "new_text" not in output
+
+
+def test_edit_call_waits_for_success_before_showing_patch():
+    renderer, stream = make_renderer()
+
+    renderer.handle_event(edit_call(1, "edit-1"))
+
+    output = stream.getvalue()
+    assert "● Edit  calc.py" in output
+    assert "return a - b" not in output
+    assert "return a + b" not in output
+    assert "applied" not in output
+    assert "edit-1" in renderer._pending_edits
+
+
+def test_successful_edit_renders_small_patch_and_clears_cache():
+    renderer, stream = make_renderer()
+    renderer.handle_event(edit_call(1, "edit-1"))
+    renderer.handle_event(
+        edit_result(2, "edit-1", source_seq=1, ok=True)
+    )
+
+    output = stream.getvalue()
+    assert "  - return a - b" in output
+    assert "  + return a + b" in output
+    assert "✓ applied" in output
+    assert renderer._pending_edits == {}
+
+
+def test_failed_edit_never_renders_patch_and_clears_cache():
+    renderer, stream = make_renderer()
+    renderer.handle_event(edit_call(1, "edit-failed"))
+    renderer.handle_event(
+        edit_result(
+            2,
+            "edit-failed",
+            source_seq=1,
+            ok=False,
+            error="search text was not found",
+        )
+    )
+
+    output = stream.getvalue()
+    assert "✗ Edit  calc.py" in output
+    assert "search text was not found" in output
+    assert "return a - b" not in output
+    assert "return a + b" not in output
+    assert "applied" not in output
+    assert renderer._pending_edits == {}
+
+
+def test_policy_blocked_edit_never_renders_patch_and_clears_cache():
+    renderer, stream = make_renderer()
+    renderer.handle_event(
+        edit_call(
+            1,
+            "edit-blocked",
+            path=".env",
+            old_text="OLD_FAKE_VALUE",
+            new_text="NEW_FAKE_VALUE",
+        )
+    )
+    renderer.handle_event(
+        edit_result(
+            2,
+            "edit-blocked",
+            source_seq=1,
+            ok=False,
+            error="policy blocked tool call: denied",
+            policy_blocked=True,
+        )
+    )
+
+    output = stream.getvalue()
+    assert "! Blocked by policy" in output
+    assert "OLD_FAKE_VALUE" not in output
+    assert "NEW_FAKE_VALUE" not in output
+    assert "applied" not in output
+    assert renderer._pending_edits == {}
+
+
+def test_edit_cache_pairs_parallel_calls_by_call_id():
+    renderer, stream = make_renderer()
+    renderer.handle_event(
+        edit_call(1, "edit-a", path="a.py", old_text="old A", new_text="new A")
+    )
+    renderer.handle_event(
+        edit_call(2, "edit-b", path="b.py", old_text="old B", new_text="new B")
+    )
+    renderer.handle_event(edit_result(3, "edit-b", source_seq=2, ok=True))
+
+    first_result = stream.getvalue()
+    assert "- old B" in first_result
+    assert "+ new B" in first_result
+    assert "- old A" not in first_result
+    assert set(renderer._pending_edits) == {"edit-a"}
+
+    renderer.handle_event(edit_result(4, "edit-a", source_seq=1, ok=True))
+    output = stream.getvalue()
+    assert "- old A" in output
+    assert "+ new A" in output
+    assert renderer._pending_edits == {}
+
+
+def test_failed_edit_does_not_pollute_next_edit_preview():
+    renderer, stream = make_renderer()
+    renderer.handle_event(
+        edit_call(1, "failed", old_text="failed old", new_text="failed new")
+    )
+    renderer.handle_event(
+        edit_result(
+            2,
+            "failed",
+            source_seq=1,
+            ok=False,
+            error="not found",
+        )
+    )
+    renderer.handle_event(
+        edit_call(3, "success", old_text="good old", new_text="good new")
+    )
+    renderer.handle_event(edit_result(4, "success", source_seq=3, ok=True))
+
+    output = stream.getvalue()
+    assert "failed old" not in output
+    assert "failed new" not in output
+    assert "- good old" in output
+    assert "+ good new" in output
+
+
+def test_session_start_clears_pending_edit_cache():
+    renderer, _stream = make_renderer()
+    renderer.handle_event(edit_call(1, "edit-1"))
+    assert renderer._pending_edits
+
+    renderer.handle_event(make_event("session_start", seq=2))
+
+    assert renderer._pending_edits == {}
+
+
+def test_small_edit_preview_shows_every_changed_line():
+    renderer, stream = make_renderer()
+    old_lines = [f"old-{index}" for index in range(6)]
+    new_lines = [f"new-{index}" for index in range(6)]
+    renderer.handle_event(
+        edit_call(
+            1,
+            "small",
+            old_text="\n".join(old_lines),
+            new_text="\n".join(new_lines),
+        )
+    )
+    renderer.handle_event(edit_result(2, "small", source_seq=1, ok=True))
+
+    output = stream.getvalue()
+
+    for line in old_lines:
+        assert f"- {line}" in output
+
+    for line in new_lines:
+        assert f"+ {line}" in output
+
+    assert "changed lines omitted" not in output
+
+
+def test_medium_edit_preview_shows_head_omission_and_tail():
+    renderer, stream = make_renderer()
+    old_lines = [f"old-{index}" for index in range(10)]
+    new_lines = [f"new-{index}" for index in range(10)]
+    renderer.handle_event(
+        edit_call(
+            1,
+            "medium",
+            old_text="\n".join(old_lines),
+            new_text="\n".join(new_lines),
+        )
+    )
+    renderer.handle_event(edit_result(2, "medium", source_seq=1, ok=True))
+
+    output = stream.getvalue()
+    assert "- old-0" in output
+    assert "- old-5" in output
+    assert "old-6" not in output
+    assert "new-3" not in output
+    assert "+ new-4" in output
+    assert "+ new-9" in output
+    assert "8 changed lines omitted" in output
+    assert "✓ applied · 20 lines changed" in output
+
+
+def test_large_edit_preview_only_shows_bounded_summary():
+    renderer, stream = make_renderer()
+    old_text = "\n".join(f"old-{index}" for index in range(25))
+    new_text = "\n".join(f"new-{index}" for index in range(25))
+    renderer.handle_event(
+        edit_call(1, "large", old_text=old_text, new_text=new_text)
+    )
+    renderer.handle_event(edit_result(2, "large", source_seq=1, ok=True))
+
+    output = stream.getvalue()
+    assert "✓ applied · 50 lines changed (+25 -25)" in output
+    assert "preview omitted for a large edit" in output
+    assert "old-0" not in output
+    assert "new-0" not in output
+    assert len(output) < 500
+
+
+def test_edit_preview_truncates_very_long_lines():
+    renderer, stream = make_renderer()
+    old_line = "A" * 2000 + "OLD_TAIL"
+    new_line = "B" * 2000 + "NEW_TAIL"
+    renderer.handle_event(
+        edit_call(1, "long", old_text=old_line, new_text=new_line)
+    )
+    renderer.handle_event(edit_result(2, "long", source_seq=1, ok=True))
+
+    output = stream.getvalue()
+    assert "chars omitted" in output
+    assert "OLD_TAIL" in output
+    assert "NEW_TAIL" in output
+    assert old_line not in output
+    assert new_line not in output
+    assert len(output) < 700
+
+
+def test_edit_preview_preserves_markup_and_unicode_as_plain_text():
+    renderer, stream = make_renderer()
+    old_text = "[bold red]旧值[/bold red]"
+    new_text = "[green]新值[/green]"
+    renderer.handle_event(
+        edit_call(1, "unicode", old_text=old_text, new_text=new_text)
+    )
+    renderer.handle_event(edit_result(2, "unicode", source_seq=1, ok=True))
+
+    output = stream.getvalue()
+    assert f"- {old_text}" in output
+    assert f"+ {new_text}" in output
 
 
 def test_long_command_is_truncated():
@@ -545,3 +828,67 @@ def test_git_status_and_diff_are_borderless_and_markup_safe():
     assert "Diff" in output
     assert injected in output
     assert "╭" not in output
+
+
+def test_git_summary_compacts_known_tracked_diff_stat():
+    renderer, stream = make_renderer()
+    renderer.render_git_summary(
+        GitSummary(
+            is_repo=True,
+            status_short=" M calc.py",
+            diff_stat=(
+                "Unstaged:\n"
+                " calc.py | 2 +-\n"
+                " 1 file changed, 1 insertion(+), 1 deletion(-)"
+            ),
+        )
+    )
+
+    output = stream.getvalue()
+    assert "Tracked diff" in output
+    assert "1 file changed · +1 -1" in output
+    assert "calc.py | 2 +-" not in output
+
+
+def test_git_summary_does_not_invent_stats_without_diff_stat():
+    renderer, stream = make_renderer()
+    renderer.render_git_summary(
+        GitSummary(
+            is_repo=True,
+            status_short="?? new_file.py",
+        )
+    )
+
+    output = stream.getvalue()
+    assert "?? new_file.py" in output
+    assert "Tracked diff" not in output
+    assert "+0 -0" not in output
+
+
+def test_untracked_files_are_not_counted_in_tracked_diff_summary():
+    renderer, stream = make_renderer()
+    renderer.render_git_summary(
+        GitSummary(
+            is_repo=True,
+            status_short=" M calc.py\n?? new_file.py",
+            diff_stat=(
+                "Unstaged:\n"
+                " calc.py | 2 +-\n"
+                " 1 file changed, 1 insertion(+), 1 deletion(-)"
+            ),
+            diff_text=(
+                "Unstaged:\n"
+                "diff --git a/calc.py b/calc.py\n"
+                "-return a - b\n"
+                "+return a + b"
+            ),
+        )
+    )
+
+    output = stream.getvalue()
+    assert "?? new_file.py" in output
+    assert "1 file changed · +1 -1" in output
+    assert "2 files changed" not in output
+    assert "Diff" in output
+    assert "-return a - b" in output
+    assert "+return a + b" in output
