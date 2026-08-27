@@ -5,9 +5,11 @@ from typing import Any
 from rich.console import Console
 from rich.panel import Panel
 from rich.rule import Rule
+from rich.syntax import Syntax
 from rich.text import Text
 
 from coding_agent.events import Event
+from coding_agent.git_utils import GitSummary
 
 
 class RichRenderer:
@@ -196,5 +198,56 @@ class RichRenderer:
                     "No progress detected after "
                     f"{count} repeated tool actions.",
                     style="bold yellow",
+                )
+            )
+
+    def render_git_summary(self, summary: GitSummary) -> None:
+        if not summary.is_repo:
+            if summary.error:
+                self.console.print(
+                    Text(f"Git unavailable: {summary.error}", style="dim")
+                )
+
+            return
+
+        if summary.error:
+            self.console.print(
+                Text(f"Git inspection failed: {summary.error}", style="yellow")
+            )
+            return
+
+        if not summary.status_short:
+            self.console.print(
+                Text("Git: no workspace changes", style="green")
+            )
+            return
+
+        self.console.print(
+            Panel(
+                Text(summary.status_short),
+                title="Git status",
+                border_style="magenta",
+            )
+        )
+
+        if summary.diff_stat:
+            self.console.print(
+                Panel(
+                    Text(summary.diff_stat),
+                    title="Git diff stat",
+                    border_style="magenta",
+                )
+            )
+
+        if summary.diff_text:
+            self.console.print(
+                Panel(
+                    Syntax(
+                        summary.diff_text,
+                        "diff",
+                        word_wrap=True,
+                    ),
+                    title="Git diff",
+                    border_style="magenta",
                 )
             )
