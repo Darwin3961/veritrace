@@ -38,6 +38,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum model/tool iterations.",
     )
 
+    parser.add_argument(
+        "--trace-dir",
+        default=str(
+            Path(__file__).resolve().parent / "traces"
+        ),
+        help="Directory for append-only session trace files.",
+    )
+
+    parser.add_argument(
+        "--no-trace",
+        action="store_true",
+        help="Disable writing the session trace file.",
+    )
+
+    parser.add_argument(
+        "--max-repeated-actions",
+        type=int,
+        default=3,
+        help=(
+            "Stop after this many consecutive identical tool actions; "
+            "use 0 to disable the guard."
+        ),
+    )
+
     return parser
 
 
@@ -74,6 +98,9 @@ def main() -> int:
             model,
             tools,
             max_steps=args.max_steps,
+            trace_dir=args.trace_dir,
+            trace_enabled=not args.no_trace,
+            max_repeated_actions=args.max_repeated_actions,
         )
 
         result = agent.run(task)
@@ -93,6 +120,21 @@ def main() -> int:
         return 1
 
     print(result)
+
+    if not args.no_trace and agent.last_trace_path:
+        print(f"Trace: {agent.last_trace_path}")
+
+    if agent.last_metrics:
+        metrics = agent.last_metrics
+        print(
+            "Metrics: "
+            f"steps={metrics['steps']} "
+            f"model_calls={metrics['model_calls']} "
+            f"tool_calls={metrics['tool_calls']} "
+            f"tool_failures={metrics['tool_failures']} "
+            f"duration_ms={metrics['duration_ms']}"
+        )
+
     return 0
 
 

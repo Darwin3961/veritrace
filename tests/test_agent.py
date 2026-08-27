@@ -225,7 +225,12 @@ def test_unknown_tool_error_is_observation(tmp_path: Path):
 
 def test_max_steps_stops_repeating_tool_calls(tmp_path: Path):
     model = RepeatingToolModel()
-    agent = AgentLoop(model, ToolRegistry(tmp_path), max_steps=3)
+    agent = AgentLoop(
+        model,
+        ToolRegistry(tmp_path),
+        max_steps=3,
+        max_repeated_actions=0,
+    )
 
     result = agent.run("Keep listing")
 
@@ -300,6 +305,18 @@ def test_invalid_model_error_limit_is_rejected(tmp_path: Path):
             ScriptedModel([]),
             ToolRegistry(tmp_path),
             max_consecutive_model_errors=-1,
+        )
+
+
+def test_invalid_repeated_action_limit_is_rejected(tmp_path: Path):
+    with pytest.raises(
+        ValueError,
+        match="max_repeated_actions must be >= 0",
+    ):
+        AgentLoop(
+            ScriptedModel([]),
+            ToolRegistry(tmp_path),
+            max_repeated_actions=-1,
         )
 
 
