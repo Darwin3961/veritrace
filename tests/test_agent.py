@@ -372,3 +372,22 @@ def test_conversation_and_tool_schemas_are_sent_to_model(tmp_path: Path):
         "edit_file",
         "run_command",
     }
+
+
+def test_agent_forwards_session_events_to_sink(tmp_path: Path):
+    events = []
+    agent = AgentLoop(
+        ScriptedModel([AgentResponse(content="Done.")]),
+        ToolRegistry(tmp_path),
+        trace_enabled=False,
+        event_sink=events.append,
+    )
+
+    assert agent.run("Finish") == "Done."
+    assert [event.type for event in events] == [
+        "session_start",
+        "user_task",
+        "step_start",
+        "assistant_response",
+        "session_end",
+    ]

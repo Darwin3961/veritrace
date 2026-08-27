@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from coding_agent.context import ConversationContext
+from coding_agent.events import Event
 from coding_agent.model import (
     ModelAdapter,
     ModelResponseError,
@@ -29,6 +30,7 @@ class AgentLoop:
         trace_dir: str | Path | None = None,
         trace_enabled: bool = True,
         max_repeated_actions: int = 3,
+        event_sink: Callable[[Event], None] | None = None,
     ):
         if max_steps <= 0:
             raise ValueError(
@@ -55,6 +57,7 @@ class AgentLoop:
         self.trace_dir = trace_dir
         self.trace_enabled = trace_enabled
         self.max_repeated_actions = max_repeated_actions
+        self.event_sink = event_sink
 
         self.last_trace_path: Path | None = None
         self.last_metrics: dict[str, Any] | None = None
@@ -112,6 +115,7 @@ class AgentLoop:
         session = SessionTrace(
             trace_dir=self.trace_dir,
             enabled=self.trace_enabled,
+            event_sink=self.event_sink,
         )
 
         self.last_trace_path = None

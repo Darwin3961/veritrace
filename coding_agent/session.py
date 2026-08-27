@@ -7,7 +7,7 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from coding_agent.events import Event
 
@@ -41,6 +41,7 @@ class SessionTrace:
         *,
         enabled: bool = True,
         max_preview_chars: int = 4000,
+        event_sink: Callable[[Event], None] | None = None,
     ):
         if max_preview_chars < 100:
             raise ValueError(
@@ -49,6 +50,7 @@ class SessionTrace:
 
         self.enabled = enabled
         self.max_preview_chars = max_preview_chars
+        self.event_sink = event_sink
 
         self.session_id = uuid.uuid4().hex
         self._events: list[Event] = []
@@ -198,6 +200,12 @@ class SessionTrace:
                     )
                     + "\n"
                 )
+
+        try:
+            if self.event_sink is not None:
+                self.event_sink(event)
+        except Exception:
+            pass
 
         return event
 
