@@ -1,0 +1,3 @@
+﻿openai==3.5.0
+rich
+pytest
