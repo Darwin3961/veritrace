@@ -115,7 +115,8 @@ def test_session_header_is_compact_and_ignores_private_event_data(tmp_path):
     assert "must-not-render" not in output
     assert "private prompt" not in output
     assert "example.invalid" not in output
-    assert "╭" not in output
+    assert "┌" in output or "╭" in output
+    assert output.count("coding-agent") == 1
 
 
 def test_session_header_includes_read_only_branch_when_available(monkeypatch):
@@ -146,13 +147,6 @@ def test_task_uses_terminal_marker_and_step_is_silent():
 @pytest.mark.parametrize(
     ("name", "arguments", "expected"),
     [
-        ("read_file", {"path": "src/main.py"}, "● Read  src/main.py"),
-        ("list_files", {"path": "src"}, "● List files  src"),
-        (
-            "search_code",
-            {"query": "needle", "path": "src"},
-            '● Search  "needle"  in src',
-        ),
         (
             "run_command",
             {"command": "python -m pytest"},
@@ -176,6 +170,129 @@ def test_tool_calls_use_friendly_terminal_names(name, arguments, expected):
 
     if name in RichRenderer.TOOL_ACTIONS:
         assert name not in output
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "expected"),
+    [
+        ("read_file", {"path": "src/main.py"}, "✓ Read  src/main.py"),
+        ("list_files", {"path": "src"}, "✓ List files  src"),
+        (
+            "search_code",
+            {"query": "needle", "path": "src"},
+            '✓ Search  "needle"  in src',
+        ),
+    ],
+)
+def test_successful_passive_tools_render_once(name, arguments, expected):
+    renderer, stream = make_renderer()
+    renderer.handle_event(
+        make_event(
+            "tool_call",
+            seq=1,
+            data={
+                "call_id": "passive-1",
+                "name": name,
+                "arguments": arguments,
+            },
+        )
+    )
+    assert stream.getvalue() == ""
+
+    renderer.handle_event(
+        make_event(
+            "tool_result",
+            seq=2,
+            source_seq=1,
+            data={
+                "call_id": "passive-1",
+                "tool_name": name,
+                "ok": True,
+                "metadata": {},
+            },
+        )
+    )
+
+    output = stream.getvalue()
+    assert expected in output
+    assert output.count(expected.removeprefix("✓ ")) == 1
+    assert name not in output
+
+
+@pytest.mark.parametrize(
+    ("policy_blocked", "expected"),
+    [
+        (False, "✗ Read  missing.py\n  file not found"),
+        (True, "! Read  missing.py\n  Blocked by policy"),
+    ],
+)
+def test_passive_tool_failure_is_concise_and_clears_cache(
+    policy_blocked,
+    expected,
+):
+    renderer, stream = make_renderer()
+    renderer.handle_event(
+        make_event(
+            "tool_call",
+            seq=1,
+            data={
+                "call_id": "read-1",
+                "name": "read_file",
+                "arguments": {"path": "missing.py"},
+            },
+        )
+    )
+    renderer.handle_event(
+        make_event(
+            "tool_result",
+            seq=2,
+            source_seq=1,
+            data={
+                "call_id": "read-1",
+                "tool_name": "read_file",
+                "ok": False,
+                "error": "file not found",
+                "metadata": {"policy_blocked": policy_blocked},
+            },
+        )
+    )
+
+    output = stream.getvalue()
+    assert expected in output
+    assert renderer._pending_passive_tools == {}
+
+
+def test_passive_tool_cache_pairs_call_ids_and_resets_on_session_start():
+    renderer, stream = make_renderer()
+
+    for seq, call_id, path in ((1, "a", "a.py"), (2, "b", "b.py")):
+        renderer.handle_event(
+            make_event(
+                "tool_call",
+                seq=seq,
+                data={
+                    "call_id": call_id,
+                    "name": "read_file",
+                    "arguments": {"path": path},
+                },
+            )
+        )
+
+    renderer.handle_event(
+        make_event(
+            "tool_result",
+            seq=3,
+            source_seq=2,
+            data={"call_id": "b", "tool_name": "read_file", "ok": True},
+        )
+    )
+    output = stream.getvalue()
+    assert "Read  b.py" in output
+    assert "Read  a.py" not in output
+    assert renderer._pending_passive_tools == {"a": "Read  a.py"}
+
+    renderer.handle_event(make_event("session_start", seq=4))
+    assert renderer._pending_passive_tools == {}
 
 
 @pytest.mark.parametrize("name", ["write_file", "edit_file"])
@@ -469,7 +586,7 @@ def test_long_command_is_truncated():
                 "ok": True,
                 "metadata": {},
             },
-            "✓ Write",
+            "✓ written",
         ),
         (
             {
@@ -535,12 +652,40 @@ def test_command_output_is_borderless_and_limited():
 
     output = stream.getvalue()
     assert "$ python -m pytest -q" in output
-    assert "characters omitted" in output
+    assert "chars omitted" in output
     assert "HEAD" in output
     assert "TAIL" in output
     assert "✓ Command completed" in output
     assert "Command output" not in output
     assert "╭" not in output
+
+
+def test_long_command_output_uses_rich_head_and_tail_without_mutation():
+    renderer, stream = make_renderer()
+    output = "\n".join(f"line-{index}" for index in range(18))
+    event = make_event(
+        "tool_result",
+        data={
+            "tool_name": "run_command",
+            "ok": False,
+            "output": output,
+            "error": "command exited with code 1",
+            "metadata": {"exit_code": 1},
+        },
+    )
+
+    renderer.handle_event(event)
+
+    rendered = stream.getvalue()
+    assert "line-0" in rendered
+    assert "line-4" in rendered
+    assert "8 lines omitted" in rendered
+    assert "line-5" not in rendered
+    assert "line-12" not in rendered
+    assert "line-13" in rendered
+    assert "line-17" in rendered
+    assert "✗ Command exited with code 1" in rendered
+    assert event.data["output"] == output
 
 
 def test_empty_command_output_is_not_rendered():
@@ -632,7 +777,11 @@ def test_ascii_fallback_uses_plain_symbols_without_crashing():
     renderer.handle_event(
         make_event(
             "tool_call",
-            data={"name": "read_file", "arguments": {"path": "a.py"}},
+            data={
+                "call_id": "read-1",
+                "name": "read_file",
+                "arguments": {"path": "a.py"},
+            },
         )
     )
     renderer.handle_event(
@@ -640,14 +789,18 @@ def test_ascii_fallback_uses_plain_symbols_without_crashing():
             "tool_result",
             seq=2,
             source_seq=1,
-            data={"tool_name": "read_file", "ok": True},
+            data={
+                "call_id": "read-1",
+                "tool_name": "read_file",
+                "ok": True,
+            },
         )
     )
 
     output = stream.getvalue()
     assert "> Run" in output
-    assert "* Read  a.py" in output
     assert "OK Read  a.py" in output
+    assert "* Read  a.py" not in output
 
 
 def test_display_path_hides_home_directory_identity():
@@ -731,10 +884,8 @@ def test_final_summary_is_compact_safe_and_does_not_invent_tests(tmp_path):
     output = stream.getvalue()
     assert "✓ Task completed" in output
     assert injected in output
-    assert "Verification" in output
-    assert "No explicit test command detected" in output
-    assert "$ python hello.py" in output
-    assert "2 steps · 2 model calls · 1 tool · 10.7k tokens · 4.2s" in output
+    assert "Tests             not run" in output
+    assert "2 steps · 1 tool · 10.7k tokens · 4.2s" in output
     assert "model_errors=0" not in output
     assert "tool_failures=0" not in output
     assert "trace  " in output
@@ -743,23 +894,27 @@ def test_final_summary_is_compact_safe_and_does_not_invent_tests(tmp_path):
     assert "Workspace clean" in output
     assert "All tests passed" not in output
     assert "Result" not in output
-    assert "╭" not in output
+    assert "┌" in output or "╭" in output
 
 
 @pytest.mark.parametrize(
-    ("stop_reason", "expected", "unexpected"),
+    ("stop_reason", "expected_reason", "unexpected"),
     [
-        ("completed", "✓ Task completed", "Agent stopped"),
-        ("max_steps", "! Agent stopped: maximum step limit", "✓ Task completed"),
-        ("no_progress", "! Agent stopped: repeated action", "✓ Task completed"),
+        ("completed", None, "Agent stopped"),
+        ("max_steps", "Maximum step limit reached", "✓ Task completed"),
+        ("no_progress", "Repeated action detected", "✓ Task completed"),
         (
             "model_error_limit",
-            "! Agent stopped: model response error limit",
+            "Model response error limit reached",
             "✓ Task completed",
         ),
     ],
 )
-def test_final_status_respects_stop_reason(stop_reason, expected, unexpected):
+def test_final_status_respects_stop_reason(
+    stop_reason,
+    expected_reason,
+    unexpected,
+):
     renderer, stream = make_renderer()
     renderer.render_final(
         result="Done.",
@@ -771,15 +926,20 @@ def test_final_status_respects_stop_reason(stop_reason, expected, unexpected):
     )
 
     output = stream.getvalue()
-    assert expected in output
+    if stop_reason == "completed":
+        assert "✓ Task completed" in output
+    else:
+        assert "! Agent stopped" in output
+        assert expected_reason in output
+
     assert unexpected not in output
 
 
 @pytest.mark.parametrize(
     ("successful", "failed", "expected"),
     [
-        (1, 0, "✓ 1 succeeded"),
-        (0, 1, "✗ 1 failed"),
+        (1, 0, "1 passed · 0 failed"),
+        (0, 1, "0 passed · 1 failed"),
     ],
 )
 def test_final_summary_reports_observed_test_command_outcomes(
@@ -808,6 +968,113 @@ def test_final_summary_reports_observed_test_command_outcomes(
     assert expected in stream.getvalue()
 
 
+def record_test_result(
+    renderer: RichRenderer,
+    *,
+    seq: int,
+    call_id: str,
+    ok: bool,
+) -> None:
+    renderer.handle_event(
+        make_event(
+            "tool_call",
+            seq=seq,
+            data={
+                "call_id": call_id,
+                "name": "run_command",
+                "arguments": {"command": "python -m pytest -q"},
+            },
+        )
+    )
+    renderer.handle_event(
+        make_event(
+            "tool_result",
+            seq=seq + 1,
+            source_seq=seq,
+            data={
+                "call_id": call_id,
+                "tool_name": "run_command",
+                "ok": ok,
+                "error": None if ok else "command exited with code 1",
+                "metadata": {"exit_code": 0 if ok else 1},
+            },
+        )
+    )
+
+
+def test_final_test_run_is_separate_from_complete_test_history():
+    renderer, stream = make_renderer(show_tool_output=False)
+    record_test_result(renderer, seq=1, call_id="failed", ok=False)
+    record_test_result(renderer, seq=3, call_id="passed", ok=True)
+
+    renderer.render_final(
+        result="Done.",
+        metrics={},
+        stop_reason="completed",
+        verification=VerificationSummary(
+            successful_commands=1,
+            failed_commands=1,
+            tests_likely_ran=True,
+            successful_test_commands=1,
+            failed_test_commands=1,
+        ),
+        git_summary=None,
+        trace_path=None,
+    )
+
+    output = stream.getvalue()
+    assert "Final test run    ✓ passed" in output
+    assert "Test history      1 passed · 1 failed" in output
+    assert "Tool failures" in output
+    assert "Regression reproduced" not in output
+
+
+def test_last_structured_test_failure_is_displayed_as_final_failure():
+    renderer, stream = make_renderer(show_tool_output=False)
+    record_test_result(renderer, seq=1, call_id="passed", ok=True)
+    record_test_result(renderer, seq=3, call_id="failed", ok=False)
+
+    renderer.render_final(
+        result="Stopped after verification.",
+        metrics={},
+        stop_reason="completed",
+        verification=VerificationSummary(
+            successful_commands=1,
+            failed_commands=1,
+            tests_likely_ran=True,
+            successful_test_commands=1,
+            failed_test_commands=1,
+        ),
+        git_summary=None,
+        trace_path=None,
+    )
+
+    output = stream.getvalue()
+    assert "Final test run    ✗ failed" in output
+    assert "Test history      1 passed · 1 failed" in output
+
+
+def test_long_final_answer_is_shortened_only_for_rich_presentation():
+    renderer, stream = make_renderer()
+    result = "\n".join(f"final-line-{index}" for index in range(10))
+
+    renderer.render_final(
+        result=result,
+        metrics={},
+        stop_reason="completed",
+        verification=VerificationSummary(),
+        git_summary=None,
+        trace_path=None,
+    )
+
+    output = stream.getvalue()
+    assert "final-line-0" in output
+    assert "final-line-5" in output
+    assert "final-line-6" not in output
+    assert "additional response lines omitted in presentation" in output
+    assert result.endswith("final-line-9")
+
+
 def test_git_status_and_diff_are_borderless_and_markup_safe():
     renderer, stream = make_renderer()
     injected = "[bold red]INJECTED[/bold red]"
@@ -816,17 +1083,25 @@ def test_git_status_and_diff_are_borderless_and_markup_safe():
             is_repo=True,
             status_short=f" M app.py\n?? {injected}",
             diff_stat="app.py | 1 +",
-            diff_text=f"diff --git a/app.py b/app.py\n+{injected}",
+            diff_text=(
+                "diff --git a/app.py b/app.py\n"
+                "--- a/app.py\n"
+                "+++ b/app.py\n"
+                "@@ -0,0 +1 @@\n"
+                f"+{injected}"
+            ),
         )
     )
 
     output = stream.getvalue()
-    assert "Workspace changes" in output
+    assert "Changes" in output
     assert "M app.py" in output
     assert "??" in output
     assert "Diff summary" in output
     assert "Diff" in output
     assert injected in output
+    assert "diff --git" not in output
+    assert "@@" not in output
     assert "╭" not in output
 
 
@@ -845,7 +1120,6 @@ def test_git_summary_compacts_known_tracked_diff_stat():
     )
 
     output = stream.getvalue()
-    assert "Tracked diff" in output
     assert "1 file changed · +1 -1" in output
     assert "calc.py | 2 +-" not in output
 
@@ -879,6 +1153,9 @@ def test_untracked_files_are_not_counted_in_tracked_diff_summary():
             diff_text=(
                 "Unstaged:\n"
                 "diff --git a/calc.py b/calc.py\n"
+                "--- a/calc.py\n"
+                "+++ b/calc.py\n"
+                "@@ -1 +1 @@\n"
                 "-return a - b\n"
                 "+return a + b"
             ),
@@ -890,5 +1167,62 @@ def test_untracked_files_are_not_counted_in_tracked_diff_summary():
     assert "1 file changed · +1 -1" in output
     assert "2 files changed" not in output
     assert "Diff" in output
-    assert "-return a - b" in output
-    assert "+return a + b" in output
+    assert "- return a - b" in output
+    assert "+ return a + b" in output
+
+
+def test_compact_diff_uses_head_tail_and_omits_raw_metadata():
+    renderer, stream = make_renderer()
+    changed = "\n".join(
+        [f"-old-{index}" for index in range(15)]
+        + [f"+new-{index}" for index in range(15)]
+    )
+    renderer.render_git_summary(
+        GitSummary(
+            is_repo=True,
+            status_short=" M module.py",
+            diff_text=(
+                "diff --git a/module.py b/module.py\n"
+                "index 1111111..2222222 100644\n"
+                "--- a/module.py\n"
+                "+++ b/module.py\n"
+                "@@ -1,15 +1,15 @@\n"
+                f"{changed}"
+            ),
+        )
+    )
+
+    output = stream.getvalue()
+    assert "old-0" in output
+    assert "old-9" in output
+    assert "10 changed lines omitted" in output
+    assert "new-5" in output
+    assert "new-14" in output
+    assert "diff --git" not in output
+    assert "index 1111111" not in output
+    assert "@@" not in output
+
+
+def test_large_compact_diff_is_summary_only():
+    renderer, stream = make_renderer()
+    changed = "\n".join(f"+line-{index}" for index in range(61))
+    renderer.render_git_summary(
+        GitSummary(
+            is_repo=True,
+            status_short=" M module.py",
+            diff_text=(
+                "diff --git a/module.py b/module.py\n"
+                "--- a/module.py\n"
+                "+++ b/module.py\n"
+                "@@ -0,0 +1,61 @@\n"
+                f"{changed}"
+            ),
+        )
+    )
+
+    output = stream.getvalue()
+    assert "preview omitted · 61 changed lines" in output
+    assert "full diff available in plain mode" in output
+    assert "line-0" not in output
+    assert "line-60" not in output
+    assert len(output) < 350

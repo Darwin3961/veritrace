@@ -71,19 +71,6 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
             AgentResponse(
                 tool_calls=[
                     ToolCall(
-                        "fix-source",
-                        "edit_file",
-                        {
-                            "path": "calc.py",
-                            "old_text": "    return a - b",
-                            "new_text": "    return a + b",
-                        },
-                    )
-                ]
-            ),
-            AgentResponse(
-                tool_calls=[
-                    ToolCall(
                         "write-test",
                         "write_file",
                         {
@@ -93,6 +80,31 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
                                 "def test_add():\n"
                                 "    assert add(2, 3) == 5\n"
                             ),
+                        },
+                    )
+                ]
+            ),
+            AgentResponse(
+                tool_calls=[
+                    ToolCall(
+                        "run-regression",
+                        "run_command",
+                        {
+                            "command": python_command("-m", "pytest", "-q"),
+                            "timeout": 20,
+                        },
+                    )
+                ]
+            ),
+            AgentResponse(
+                tool_calls=[
+                    ToolCall(
+                        "fix-source",
+                        "edit_file",
+                        {
+                            "path": "calc.py",
+                            "old_text": "    return a - b",
+                            "new_text": "    return a + b  # corrected",
                         },
                     )
                 ]
@@ -141,8 +153,9 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
     assert (tmp_path / "tests" / "test_calc.py").exists()
     assert verification.successful_file_changes == 3
     assert verification.successful_commands == 1
+    assert verification.failed_commands == 1
     assert verification.successful_test_commands == 1
-    assert verification.failed_test_commands == 0
+    assert verification.failed_test_commands == 1
     assert git_summary.is_repo is True
     assert "?? calc.py" in git_summary.status_short
     assert "?? tests/" in git_summary.status_short
@@ -162,15 +175,16 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
     assert "Write  tests/test_calc.py" in output
     assert "Edit  calc.py" in output
     assert "-     return a - b" in output
-    assert "+     return a + b" in output
+    assert "+     return a + b  # corrected" in output
     assert "✓ applied" in output
     assert "$ " in output
     assert "1 passed" in output
     assert "✓ Task completed" in output
-    assert "Verification" in output
-    assert "✓ 1 succeeded" in output
-    assert "5 steps · 5 model calls · 4 tools" in output
+    assert "Final test run    ✓ passed" in output
+    assert "Test history      1 passed · 1 failed" in output
+    assert "6 steps · 5 tools" in output
     assert "trace  " in output
-    assert "Workspace changes" in output
+    assert "Changes" in output
     assert "Coding Agent Session" not in output
-    assert "╭" not in output
+    assert output.count("┌") + output.count("╭") == 2
+    assert "Regression reproduced" not in output

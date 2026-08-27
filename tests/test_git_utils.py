@@ -327,16 +327,22 @@ def test_renderer_shows_clean_and_changed_git_summaries():
             is_repo=True,
             status_short=" M app.py",
             diff_stat="app.py | 1 +",
-            diff_text="diff --git a/app.py b/app.py\n+safe change",
+            diff_text=(
+                "diff --git a/app.py b/app.py\n"
+                "--- a/app.py\n"
+                "+++ b/app.py\n"
+                "@@ -0,0 +1 @@\n"
+                "+safe change"
+            ),
         )
     )
 
     output = stream.getvalue()
     assert "Workspace clean" in output
-    assert "Workspace changes" in output
+    assert "Changes" in output
     assert "M app.py" in output
     assert "Diff summary" in output
-    assert "+safe change" in output
+    assert "+ safe change" in output
 
 
 def test_renderer_git_summary_is_markup_safe():
