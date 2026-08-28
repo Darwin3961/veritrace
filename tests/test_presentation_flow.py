@@ -170,6 +170,7 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
     assert trace_events[-1]["type"] == "session_end"
 
     output = stream.getvalue()
+    assert "✦ VeriTrace" in output
     assert "› Implement add(a, b) with a pytest test" in output
     assert "Write  calc.py" in output
     assert "Write  tests/test_calc.py" in output

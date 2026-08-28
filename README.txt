@@ -1,4 +1,4 @@
-Coding Agent 使用说明
+VeriTrace 使用说明
 
 仓库：https://github.com/Darwin3961/coding-agent
 环境：Python 3.10+，支持 Windows 与 POSIX。安装：python -m venv .venv，然后激活虚拟环境并执行 pip install -r requirements.txt。

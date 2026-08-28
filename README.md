@@ -1,4 +1,4 @@
-# Coding Agent
+# VeriTrace
 
 A lightweight local coding agent implemented from scratch. The language model
 reasons and requests native tool calls; repository inspection, file editing,

@@ -122,7 +122,7 @@ class RichRenderer:
         encoding = getattr(self.console, "encoding", None) or "utf-8"
 
         try:
-            "✓●›".encode(encoding)
+            "✦✓●›".encode(encoding)
         except (LookupError, UnicodeEncodeError):
             return False
 
@@ -130,6 +130,7 @@ class RichRenderer:
 
     def _symbol(self, name: str) -> str:
         unicode_values = {
+            "signature": "✦",
             "bullet": "●",
             "task": "›",
             "success": "✓",
@@ -138,6 +139,7 @@ class RichRenderer:
             "separator": "─",
         }
         ascii_values = {
+            "signature": "*",
             "bullet": "*",
             "task": ">",
             "success": "OK",
@@ -211,13 +213,16 @@ class RichRenderer:
 
     def _render_header(self) -> None:
         branch = self._read_git_branch()
-        header = Text("coding-agent", style="bold cyan")
+        header = Text(
+            f"{self._symbol('signature')} VeriTrace",
+            style="bold cyan",
+        )
+        header.append("\n  ")
 
         if branch:
-            header.append("  on  ", style="dim")
             header.append(branch, style="dim cyan")
+            header.append(" · ", style="dim")
 
-        header.append("  via  ", style="dim")
         header.append(
             f"Python {platform.python_version()}",
             style="dim",
@@ -225,15 +230,29 @@ class RichRenderer:
 
         if self.model_name:
             header.append("\n")
-            model = Text("model      ", style="dim")
+            model = Text("  model       ", style="dim")
             model.append(self._inline(self.model_name), style="dim")
             header.append_text(model)
 
         if self.workspace_root is not None:
+            try:
+                is_home = (
+                    self.workspace_root
+                    == Path.home().expanduser().resolve()
+                )
+            except OSError:
+                is_home = False
+
+            workspace_name = (
+                "~"
+                if is_home
+                else self.workspace_root.name
+                or sanitize_display_path(self.workspace_root, max_chars=40)
+            )
             header.append("\n")
-            workspace = Text("workspace  ", style="dim")
+            workspace = Text("  workspace   ", style="dim")
             workspace.append(
-                sanitize_display_path(self.workspace_root),
+                workspace_name,
                 style="dim",
             )
             header.append_text(workspace)

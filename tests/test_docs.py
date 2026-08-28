@@ -15,6 +15,15 @@ def test_primary_readme_files_exist_and_are_nonempty():
         assert content.strip()
 
 
+def test_readme_brand_is_veritrace_without_renaming_repository():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    submission = (ROOT / "README.txt").read_text(encoding="utf-8")
+
+    assert readme.startswith("# VeriTrace\n")
+    assert submission.startswith("VeriTrace 使用说明\n")
+    assert "https://github.com/Darwin3961/coding-agent" in submission
+
+
 def test_submission_readme_is_utf8_bounded_and_has_repository_url():
     raw = (ROOT / "README.txt").read_bytes()
     content = raw.decode("utf-8")

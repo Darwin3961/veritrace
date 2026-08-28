@@ -107,16 +107,17 @@ def test_session_header_is_compact_and_ignores_private_event_data(tmp_path):
     )
 
     output = stream.getvalue()
-    assert "coding-agent" in output
+    assert "✦ VeriTrace" in output
     assert f"Python {platform.python_version()}" in output
-    assert "model      deepseek-v4-flash" in output
-    assert "workspace" in output
+    assert "model       deepseek-v4-flash" in output
+    assert f"workspace   {tmp_path.name}" in output
+    assert str(tmp_path) not in output
     assert "Coding Agent Session" not in output
     assert "must-not-render" not in output
     assert "private prompt" not in output
     assert "example.invalid" not in output
     assert "┌" in output or "╭" in output
-    assert output.count("coding-agent") == 1
+    assert output.count("VeriTrace") == 1
 
 
 def test_session_header_includes_read_only_branch_when_available(monkeypatch):
@@ -126,7 +127,8 @@ def test_session_header_includes_read_only_branch_when_available(monkeypatch):
     renderer.handle_event(make_event("session_start"))
 
     output = stream.getvalue()
-    assert "coding-agent  on  main  via  Python" in output
+    assert "✦ VeriTrace" in output
+    assert "main · Python" in output
     assert "http" not in output
 
 
@@ -798,9 +800,34 @@ def test_ascii_fallback_uses_plain_symbols_without_crashing():
     )
 
     output = stream.getvalue()
+    assert "* VeriTrace" in output
     assert "> Run" in output
     assert "OK Read  a.py" in output
     assert "* Read  a.py" not in output
+
+
+def test_header_workspace_uses_basename_and_hides_parent_identity(tmp_path):
+    workspace = tmp_path / "private-parent" / "regression"
+    workspace.mkdir(parents=True)
+    renderer, stream = make_renderer(workspace_root=workspace)
+
+    renderer.handle_event(make_event("session_start"))
+
+    output = stream.getvalue()
+    assert "workspace   regression" in output
+    assert "private-parent" not in output
+    assert str(tmp_path) not in output
+
+
+def test_header_displays_home_workspace_without_username(monkeypatch):
+    renderer, stream = make_renderer(workspace_root=Path.home())
+    monkeypatch.setattr(renderer, "_read_git_branch", lambda: None)
+
+    renderer.handle_event(make_event("session_start"))
+
+    output = stream.getvalue()
+    assert "workspace   ~" in output
+    assert Path.home().name not in output
 
 
 def test_display_path_hides_home_directory_identity():
