@@ -1,6 +1,6 @@
 VeriTrace 使用说明
 
-仓库：https://github.com/Darwin3961/coding-agent
+仓库：https://github.com/Darwin3961/veritrace
 环境：Python 3.10+，支持 Windows 与 POSIX。安装：python -m venv .venv，然后激活虚拟环境并执行 pip install -r requirements.txt。
 
 配置：在当前 shell 设置 DEEPSEEK_API_KEY；可选设置 MODEL_BASE_URL 和 MODEL_NAME。程序不会自动加载 .env，请勿提交真实密钥。

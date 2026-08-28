@@ -10,7 +10,7 @@ from typing import Callable, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_BRANCH = "main"
-EXPECTED_REMOTE_SUFFIX = "Darwin3961/coding-agent.git"
+EXPECTED_REMOTE_SUFFIX = "Darwin3961/veritrace.git"
 
 REQUIRED_FILES = (
     ".env.example",

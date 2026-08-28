@@ -12,7 +12,7 @@ from scripts.release_check import (
 )
 
 
-REMOTE = "https://github.com/Darwin3961/coding-agent.git"
+REMOTE = "https://github.com/Darwin3961/veritrace.git"
 
 
 def _git(root: Path, *arguments: str) -> None:
