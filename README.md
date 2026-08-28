@@ -9,57 +9,29 @@
 A lightweight coding agent built from scratch with native tool calling,
 controlled local execution, structured tracing, and evidence-based verification.
 
-[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![No Agent Framework](https://img.shields.io/badge/Agent_Framework-none-555555)](#architecture)
-[![Local Execution](https://img.shields.io/badge/Execution-local-0A7E8C)](#why-veritrace)
-[![355 Tests](https://img.shields.io/badge/Tests-355_passing-2E8B57)](#evaluation)
+<p>
+  <a href="https://www.python.org/"><img alt="Python 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&amp;logoColor=white"></a>
+  <a href="#how-veritrace-works"><img alt="No Agent Framework" src="https://img.shields.io/badge/Agent_Framework-none-555555"></a>
+  <a href="#why-veritrace"><img alt="Local Execution" src="https://img.shields.io/badge/Execution-local-0A7E8C"></a>
+  <a href="#evaluation"><img alt="355 Tests" src="https://img.shields.io/badge/Tests-355_passing-2E8B57"></a>
+</p>
 
-[Demo](#demo) · [Why VeriTrace?](#why-veritrace) · [Architecture](#architecture) · [Quick Start](#quick-start) · [Evaluation](#evaluation) · [Limitations](#safety-and-limitations)
+[Demo](#demo) · [Why VeriTrace?](#why-veritrace) · [How It Works](#how-veritrace-works) · [Features](#features) · [Quick Start](#quick-start) · [Evaluation](#evaluation) · [Limitations](#safety-and-limitations)
+
+<img src="docs/assets/veritrace-hero.gif" width="960" alt="VeriTrace coding agent demo">
 
 </div>
 
 ## Demo
 
-This is an illustrative excerpt from the reproducible demo—not a fabricated
-screenshot or a complete raw transcript. The scenario and independent
-verification command are defined in [`demo/scenarios.py`](demo/scenarios.py).
+The animation above is a condensed visualization of a reproducible
+regression-fixing run, not a fabricated raw terminal recording. VeriTrace adds a
+focused regression test, observes the failure as execution feedback, applies the
+smallest production fix, and verifies the full test suite.
 
-```text
-╭────────────────────────────────────────╮
-│ ✦ VeriTrace                            │
-│   main · Python 3.12                   │
-│   workspace   regression               │
-╰────────────────────────────────────────╯
-
-› Fix the limit=0 regression, add a test, and verify the full suite.
-
-✓ Read  selector.py
-✓ Read  tests/test_selector.py
-
-● Edit  tests/test_selector.py
-  + def test_zero_limit_returns_no_items():
-  +     assert select_items(["a", "b", "c"], 0) == []
-  ✓ applied
-
-● Run
-  $ python -m pytest tests/test_selector.py -q
-  1 failed
-
-● Edit  selector.py
-  - if not limit:
-  + if limit is None:
-  ✓ applied
-
-● Run
-  $ python -m pytest -q
-  3 passed
-
-Final test run    ✓ passed
-Test history      1 passed · 1 failed
-```
-
-Create one of the maintained demo workspaces and follow the complete walkthrough
-in [docs/DEMO.md](docs/DEMO.md):
+The maintained scenarios are defined in
+[`demo/scenarios.py`](demo/scenarios.py). For a complete reproducible walkthrough,
+see [docs/DEMO.md](docs/DEMO.md):
 
 ```powershell
 python demo/create_demo_workspace.py --scenario bugfix --output "$env:TEMP\veritrace-bugfix" --force
@@ -69,10 +41,10 @@ python demo/create_demo_workspace.py --scenario bugfix --output "$env:TEMP\verit
 
 | Control | Observe | Verify |
 |---|---|---|
-| Workspace boundary | Normalized `ToolResult` | Structured command evidence |
-| Sensitive-file guard | Append-only JSONL events | Exit code and timeout state |
-| Deterministic command policy | Metrics and Rich CLI | Final test state |
-| Timeout and process cleanup | Separate human/model projections | Git change evidence |
+| Workspace boundary | Structured Events | Evidence-based Verification |
+| Sensitive-file guard | Append-only JSONL trace | Real command results |
+| Deterministic command policy | Metrics / Rich CLI | Final test state |
+| Timeout / process cleanup | Human/model projections | Git change evidence |
 
 ### Control
 
@@ -94,40 +66,20 @@ local execution evidence rather than trusting that claim. Test-like command
 results, exit codes, timeouts, and final workspace changes support the displayed
 status; they do not constitute a proof of semantic correctness.
 
-## Architecture
+## How VeriTrace Works
 
-```mermaid
-flowchart TD
-    U[User task] --> A[AgentLoop]
-    A --> M[ModelAdapter]
-    M -->|model proposes| C[ToolCall]
-    C --> R[ToolRegistry]
-    R --> P[SafetyPolicy]
-    P -->|local runtime executes| L[WorkspaceTools / CommandExecutor]
-    L --> O[ToolResult]
-    O --> H[ConversationContext]
-    H -->|next model turn| A
+<div align="center">
+  <img src="docs/assets/veritrace-architecture.svg" width="1000" alt="VeriTrace architecture">
+</div>
 
-    A --> E[Event]
-    O --> E
-    E --> T[SessionTrace]
-    E --> V[Verification]
-    E --> X[Metrics]
-    E --> D[Rich Renderer]
+- `ToolResult` — normalized execution observation.
+- `Event` — append-only structured execution fact.
+- History — projection for the model.
+- Renderer — projection for the human.
 
-    W[Workspace] -. read-only inspection .-> G[GitInspector]
-    G --> D
-```
-
-- `ToolResult` = normalized execution observation.
-- `Event` = append-only structured execution fact.
-- History = a projection for the model.
-- Renderer = a projection for the human.
-
-This separation keeps provider payloads, execution, evidence, and presentation
-independent: changing how a run is displayed does not change agent behavior.
-Provider-hosted file systems and provider-hosted code execution are not used.
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed design.
+This separation lets presentation evolve without changing the agent's control
+logic. Provider-hosted file systems and provider-hosted code execution are not
+used. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed design.
 
 ## Features
 
@@ -250,8 +202,8 @@ result and metric fields, not conversation history or credentials.
   semantic context for very large codebases.
 - There is no persistent interactive shell session.
 - Task success still depends on model behavior and the local environment.
-- The project does not implement multi-agent orchestration, RAG, MCP integration,
-  IDE integration, long-term memory, automatic Git commits/pushes, or rollback.
+- Advanced orchestration features such as multi-agent execution, RAG, MCP
+  integration, and long-term memory are intentionally out of scope.
 
 ## Project Structure
 
@@ -281,4 +233,3 @@ main.py               Command-line entry point
 
 - [Architecture](docs/ARCHITECTURE.md) — lifecycle, contracts, and design tradeoffs.
 - [Reproducible Demo](docs/DEMO.md) — end-to-end Windows PowerShell walkthrough.
-- [Video Script](docs/VIDEO_SCRIPT.md) — a concise, privacy-conscious demo guide.
