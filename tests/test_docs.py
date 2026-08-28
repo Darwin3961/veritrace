@@ -19,9 +19,63 @@ def test_readme_brand_and_repository_are_veritrace():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     submission = (ROOT / "README.txt").read_text(encoding="utf-8")
 
-    assert readme.startswith("# VeriTrace\n")
+    assert "# ✦ VeriTrace" in readme.split("</div>", 1)[0]
     assert submission.startswith("VeriTrace 使用说明\n")
     assert "https://github.com/Darwin3961/veritrace" in submission
+
+
+def test_readme_has_landing_page_structure_in_order():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    headings = (
+        "## Demo",
+        "## Why VeriTrace?",
+        "## Architecture",
+        "## Features",
+        "## Quick Start",
+        "## Evaluation",
+        "## Safety and Limitations",
+        "## Project Structure",
+        "## Documentation",
+    )
+
+    positions = [readme.index(heading) for heading in headings]
+    assert positions == sorted(positions)
+
+
+def test_readme_uses_truthful_hero_demo_and_architecture():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    hero = readme.split("</div>", 1)[0]
+
+    assert "Model claims are not execution facts" in hero
+    assert hero.count("img.shields.io") == 4
+    assert "355 Tests" in hero
+    assert "illustrative excerpt from the reproducible demo" in readme
+    assert "```mermaid" in readme
+    assert "ToolResult` = normalized execution observation" in readme
+    assert "Event` = append-only structured execution fact" in readme
+
+
+def test_readme_relative_markdown_links_exist():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    relative_links = re.findall(r"\[[^]]+\]\((?!https?://|#)([^)]+)\)", readme)
+
+    assert relative_links
+    assert all((ROOT / link).exists() for link in relative_links)
+
+
+def test_readme_avoids_unsupported_product_claims():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
+    unsupported_claims = (
+        "formal verification",
+        "guaranteed correctness",
+        "production ready",
+        "enterprise grade",
+        "autonomous software engineer",
+        "swe-bench",
+        "the model cannot finish until tests pass",
+    )
+
+    assert all(claim not in readme for claim in unsupported_claims)
 
 
 def test_submission_readme_is_utf8_bounded_and_has_repository_url():

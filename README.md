@@ -1,63 +1,170 @@
-# VeriTrace
+<div align="center">
 
-A lightweight local coding agent implemented from scratch. The language model
-reasons and requests native tool calls; repository inspection, file editing,
-command execution, policy checks, history, termination, tracing, and presentation
-are implemented locally by this project.
+# ✦ VeriTrace
 
-## Features
+### A controllable, observable, and verifiable local coding agent
 
-- OpenAI-compatible native tool calling through a provider-isolated adapter.
-- Workspace-scoped `list_files`, `search_code`, `read_file`, `write_file`, and
-  exact unique SEARCH/REPLACE through `edit_file`.
-- Local shell command execution with a fixed working directory, timeouts,
-  process-tree termination, and bounded stdout/stderr.
-- Deterministic best-effort policy checks before local tool execution.
-- Append-only JSONL events with defensive redaction and bounded previews.
-- Maximum-step and repeated-action termination guards.
-- Run metrics, Rich live activity, verification summaries, and read-only Git
-  status/diff presentation.
-- Reproducible demo workspaces and an evaluation runner with independent tests.
+**Model claims are not execution facts. Verification uses evidence.**
+
+A lightweight coding agent built from scratch with native tool calling,
+controlled local execution, structured tracing, and evidence-based verification.
+
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![No Agent Framework](https://img.shields.io/badge/Agent_Framework-none-555555)](#architecture)
+[![Local Execution](https://img.shields.io/badge/Execution-local-0A7E8C)](#why-veritrace)
+[![355 Tests](https://img.shields.io/badge/Tests-355_passing-2E8B57)](#evaluation)
+
+[Demo](#demo) · [Why VeriTrace?](#why-veritrace) · [Architecture](#architecture) · [Quick Start](#quick-start) · [Evaluation](#evaluation) · [Limitations](#safety-and-limitations)
+
+</div>
+
+## Demo
+
+This is an illustrative excerpt from the reproducible demo—not a fabricated
+screenshot or a complete raw transcript. The scenario and independent
+verification command are defined in [`demo/scenarios.py`](demo/scenarios.py).
+
+```text
+╭────────────────────────────────────────╮
+│ ✦ VeriTrace                            │
+│   main · Python 3.12                   │
+│   workspace   regression               │
+╰────────────────────────────────────────╯
+
+› Fix the limit=0 regression, add a test, and verify the full suite.
+
+✓ Read  selector.py
+✓ Read  tests/test_selector.py
+
+● Edit  tests/test_selector.py
+  + def test_zero_limit_returns_no_items():
+  +     assert select_items(["a", "b", "c"], 0) == []
+  ✓ applied
+
+● Run
+  $ python -m pytest tests/test_selector.py -q
+  1 failed
+
+● Edit  selector.py
+  - if not limit:
+  + if limit is None:
+  ✓ applied
+
+● Run
+  $ python -m pytest -q
+  3 passed
+
+Final test run    ✓ passed
+Test history      1 passed · 1 failed
+```
+
+Create one of the maintained demo workspaces and follow the complete walkthrough
+in [docs/DEMO.md](docs/DEMO.md):
+
+```powershell
+python demo/create_demo_workspace.py --scenario bugfix --output "$env:TEMP\veritrace-bugfix" --force
+```
+
+## Why VeriTrace?
+
+| Control | Observe | Verify |
+|---|---|---|
+| Workspace boundary | Normalized `ToolResult` | Structured command evidence |
+| Sensitive-file guard | Append-only JSONL events | Exit code and timeout state |
+| Deterministic command policy | Metrics and Rich CLI | Final test state |
+| Timeout and process cleanup | Separate human/model projections | Git change evidence |
+
+### Control
+
+The model proposes normalized `ToolCall` objects; the local runtime validates and
+executes them. Workspace path enforcement, sensitive-file filtering, command
+timeouts, process-tree cleanup, and policy checks reduce common risks.
+**SafetyPolicy is a deterministic best-effort guard, not an OS sandbox.**
+
+### Observe
+
+Every tool returns a normalized `ToolResult`, and the loop emits structured
+`Event` facts. Append-only JSONL tracing, metrics, and the Rich renderer are
+projections of those facts rather than hidden orchestration inside the model.
+
+### Verify
+
+The model may claim completion, but VeriTrace evaluates verification from real
+local execution evidence rather than trusting that claim. Test-like command
+results, exit codes, timeouts, and final workspace changes support the displayed
+status; they do not constitute a proof of semantic correctness.
 
 ## Architecture
 
-```text
-User Task
-   |
-AgentLoop
-   |
-ModelAdapter
-   |
-ToolCall
-   |
-ToolRegistry
-   |
-SafetyPolicy
-   |
-Local Tools / Executor
-   |
-ToolResult
-   |
-ConversationContext
-   |
-next model turn
+```mermaid
+flowchart TD
+    U[User task] --> A[AgentLoop]
+    A --> M[ModelAdapter]
+    M -->|model proposes| C[ToolCall]
+    C --> R[ToolRegistry]
+    R --> P[SafetyPolicy]
+    P -->|local runtime executes| L[WorkspaceTools / CommandExecutor]
+    L --> O[ToolResult]
+    O --> H[ConversationContext]
+    H -->|next model turn| A
+
+    A --> E[Event]
+    O --> E
+    E --> T[SessionTrace]
+    E --> V[Verification]
+    E --> X[Metrics]
+    E --> D[Rich Renderer]
+
+    W[Workspace] -. read-only inspection .-> G[GitInspector]
+    G --> D
 ```
 
-```text
-Events
-├─ JSONL Trace
-├─ Rich Renderer
-├─ Metrics
-└─ Verification
+- `ToolResult` = normalized execution observation.
+- `Event` = append-only structured execution fact.
+- History = a projection for the model.
+- Renderer = a projection for the human.
+
+This separation keeps provider payloads, execution, evidence, and presentation
+independent: changing how a run is displayed does not change agent behavior.
+Provider-hosted file systems and provider-hosted code execution are not used.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed design.
+
+## Features
+
+### Agent Core
+
+- Native OpenAI-compatible tool calling behind a provider-isolated adapter.
+- Explicit `AgentLoop` with conversation/tool-result pairing and multiple calls
+  per model response.
+- Errors returned as observations, maximum-step termination, and lightweight
+  repeated-action detection.
+
+### Local Tools
+
+- Workspace-scoped `list_files`, `search_code`, and `read_file`.
+- `edit_file` with exact, unique SEARCH/REPLACE semantics.
+- `write_file` and `run_command` with normalized results.
+
+### Execution Safety
+
+- Resolved workspace boundary and sensitive-file protection.
+- Deterministic best-effort command policy before execution.
+- Timeout, process-tree termination, and bounded stdout/stderr output.
+
+### Observability and Verification
+
+- Append-only JSONL trace with defensive redaction and bounded previews.
+- Metrics and terminal-native Rich rendering with adaptive edit previews.
+- Read-only Git status/diff presentation and deterministic verification summary.
+
+## Quick Start
+
+Clone the repository:
+
+```bash
+git clone https://github.com/Darwin3961/veritrace.git
+cd veritrace
 ```
-
-The model only requests actions. Local project code validates and executes every
-tool call and returns a normalized observation. Provider-hosted file systems or
-code execution are not used. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-## Installation
-
-Python 3.10 or newer is recommended.
 
 Windows PowerShell:
 
@@ -65,110 +172,113 @@ Windows PowerShell:
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+
+$env:DEEPSEEK_API_KEY = "<your-key>"
+$env:MODEL_BASE_URL = "https://api.deepseek.com"
+$env:MODEL_NAME = "deepseek-v4-flash"
+
+python main.py --workspace <path> "Fix the failing tests and verify the result."
 ```
 
-POSIX shells:
+POSIX shell:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+
+export DEEPSEEK_API_KEY="<your-key>"
+export MODEL_BASE_URL="https://api.deepseek.com"
+export MODEL_NAME="deepseek-v4-flash"
+
+python main.py --workspace ./demo-project \
+  "Fix the failing tests, make the smallest correct change, and verify the result."
 ```
 
-## Configuration
+Set environment variables in your shell. VeriTrace does not automatically load
+`.env` files. `MODEL_BASE_URL` and `MODEL_NAME` are optional overrides;
+`DEEPSEEK_API_KEY` is required for live model calls. Do not commit credentials.
 
-Set environment variables in your shell. The application does not automatically
-load `.env` files.
+The current CLI entry point is `python main.py`; this repository does not publish
+a `veritrace` console script. Available options are:
 
-- `DEEPSEEK_API_KEY`: required API credential.
-- `MODEL_BASE_URL`: optional OpenAI-compatible endpoint override.
-- `MODEL_NAME`: optional model-name override.
-
-Example for PowerShell:
-
-```powershell
-$env:DEEPSEEK_API_KEY = "<your-key>"
-$env:MODEL_BASE_URL = "https://api.deepseek.com"
-$env:MODEL_NAME = "deepseek-v4-flash"
-```
-
-Do not commit real credentials.
-
-## Usage
-
-```powershell
-python main.py --workspace PATH "Fix the failing tests and verify the result."
-```
-
-When the positional task is omitted, the CLI prompts on standard input. Supported
-options are:
-
-- `--workspace`: fixed directory available to local tools.
-- `--max-steps`: maximum model/tool iterations.
-- `--trace-dir`: JSONL trace output directory.
-- `--no-trace`: keep events in memory without writing a trace file.
-- `--max-repeated-actions`: repeated-action limit; `0` disables the guard.
-- `--plain`: plain-text output instead of Rich rendering.
-- `--no-diff`: skip final Git workspace inspection.
-
-## Demo
-
-Create a deterministic failing workspace and follow the walkthrough in
-[docs/DEMO.md](docs/DEMO.md):
-
-```powershell
-python demo/create_demo_workspace.py --scenario bugfix --output "$env:TEMP\coding-agent-bugfix" --force
-```
-
-Available scenarios are `bugfix`, `implement`, and `multi_file`.
-
-## Safety Model
-
-**SafetyPolicy is a deterministic best-effort guard, not an OS sandbox.**
-
-The implementation combines workspace path validation, sensitive-file filtering,
-obvious dangerous-command detection, command timeouts, process-tree termination,
-output truncation, and trace/diff redaction. Shell filtering reduces common risks
-but cannot provide complete isolation against arbitrary commands. Run the agent
-only in a workspace whose contents and execution environment you are prepared to
-expose to local commands.
-
-## Trace and Observability
-
-Each run creates a fresh event session. Events are retained in memory and, unless
-disabled, appended to a JSONL trace under `traces/`. Events drive Rich rendering,
-metrics, and verification reporting. Known secret-shaped keys and values are
-redacted defensively, but redaction is best effort and should not replace careful
-credential handling.
+- `--workspace`
+- `--max-steps`
+- `--trace-dir`
+- `--no-trace`
+- `--max-repeated-actions`
+- `--plain`
+- `--no-diff`
 
 ## Evaluation
 
-The evaluation runner creates isolated temporary workspaces, invokes the real
-agent core, and then runs a separate verification command. Success is based on
-that independent command rather than the model's final text.
+The evaluation runner creates an isolated workspace for each scenario, invokes
+the real agent core, and then executes a separate verification command. Success
+therefore depends on independent local verification rather than the model's final
+text.
+
+| Evaluation | Result |
+|---|---:|
+| Automated tests | 355 passed, 1 skipped |
+| Reproducible scenarios | 3 (`bugfix`, `implement`, `multi_file`) |
+| Recorded live model runs | 12 / 12 passed |
+
+The scenario count comes from [`demo/scenarios.py`](demo/scenarios.py), the
+automated-test count is verified by the repository test suite, and the live-run
+row records repeated model-backed executions of the maintained scenarios. This is
+a small internal reproducible evaluation, not a general coding-agent benchmark.
 
 ```powershell
 python eval/run_eval.py --scenario bugfix
 python eval/run_eval.py --all --output-json eval/results/latest.json
 ```
 
-Live evaluation requires `DEEPSEEK_API_KEY`. JSON output contains only normalized
-result and metric fields.
+Live evaluation requires `DEEPSEEK_API_KEY`; JSON output contains normalized
+result and metric fields, not conversation history or credentials.
+
+## Safety and Limitations
+
+- SafetyPolicy is not a sandbox. Its deterministic checks are a best-effort risk
+  reduction layer, not OS or network isolation.
+- `run_command` executes on the host with its working directory fixed to the
+  configured workspace; shell filtering cannot fully isolate arbitrary commands.
+- Test-command detection is heuristic.
+- Verification means observed commands and results support the displayed status;
+  it is not a proof of semantic correctness.
+- Conversation history is linear and currently has no context compaction.
+- The design targets small and medium local coding tasks, not repository-scale
+  semantic context for very large codebases.
+- There is no persistent interactive shell session.
+- Task success still depends on model behavior and the local environment.
+- The project does not implement multi-agent orchestration, RAG, MCP integration,
+  IDE integration, long-term memory, automatic Git commits/pushes, or rollback.
 
 ## Project Structure
 
 ```text
-coding_agent/   core agent, tools, policy, trace, and presentation
-demo/           deterministic scenario definitions and workspace generator
-eval/           live evaluation runner
-docs/           architecture and reproducible demo guides
-tests/          unit and integration tests
-main.py         command-line entry point
+coding_agent/
+├── agent.py          Agent loop, termination, and tool dispatch
+├── model.py          OpenAI-compatible provider adapter
+├── context.py        Conversation and tool-result history
+├── registry.py       Tool schemas, policy check, and dispatch
+├── tools.py          Workspace-scoped file operations
+├── executor.py       Local command execution and timeout handling
+├── policy.py         Deterministic best-effort safety checks
+├── session.py        Append-only trace and metrics
+├── verification.py   Evidence-based verification summary
+├── renderer.py       Rich event projection for humans
+└── git_utils.py      Read-only workspace status and diff inspection
+
+demo/                 Deterministic scenario definitions and generator
+eval/                 Live evaluation runner with independent verification
+docs/                 Architecture, demo, and presentation guides
+scripts/              Release and submission checks
+tests/                Unit and integration tests
+main.py               Command-line entry point
 ```
 
-## Limitations
+## Documentation
 
-The policy layer is not a sandbox and does not provide OS or network isolation.
-The project does not implement multi-agent orchestration, RAG, MCP integration,
-IDE integration, long-term memory, automatic Git commits/pushes, or rollback.
-Evaluation quality still depends on the configured model and local environment.
+- [Architecture](docs/ARCHITECTURE.md) — lifecycle, contracts, and design tradeoffs.
+- [Reproducible Demo](docs/DEMO.md) — end-to-end Windows PowerShell walkthrough.
+- [Video Script](docs/VIDEO_SCRIPT.md) — a concise, privacy-conscious demo guide.
