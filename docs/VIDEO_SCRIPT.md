@@ -2,9 +2,9 @@
 
 ## 0–10 seconds — Introduction
 
-“This is a lightweight local coding agent built from scratch. The model reasons
-and requests native tool calls, while every file operation and command executes
-locally in a controlled workspace.”
+“VeriTrace is a lightweight local coding agent built from scratch. The model
+reasons and requests native tool calls, while every file operation and command
+executes locally in a controlled workspace.”
 
 Show only the project terminal and the short README overview.
 
@@ -13,12 +13,15 @@ Show only the project terminal and the short README overview.
 Point to the architecture diagram:
 
 ```text
-ModelAdapter → AgentLoop → ToolRegistry → SafetyPolicy → Local Tools
+AgentLoop → ModelAdapter → ToolCall → ToolRegistry → SafetyPolicy → Local Tools
+    ↑                                                          │
+    └──────────── ToolResult / Context / Trace ─────────────────┘
 ```
 
-“The provider adapter normalizes native tool calling. There is no agent framework
-and no provider-hosted code execution. ToolCall and ToolResult keep the core
-independent from the model client.”
+“AgentLoop orchestrates the model and local tool cycle. The provider adapter
+normalizes native tool calling; ToolResult observations return through context
+and trace for the next step. There is no agent framework or provider-hosted code
+execution.”
 
 ## 25–75 seconds — Bug-fix demo
 

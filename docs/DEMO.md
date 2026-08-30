@@ -8,8 +8,10 @@ It keeps the demo workspace outside the source repository.
 From the project root:
 
 ```powershell
+$projectRoot = (Get-Location).Path
+$python = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $demo = Join-Path $env:TEMP "coding-agent-bugfix"
-.\.venv\Scripts\python.exe .\demo\create_demo_workspace.py `
+& $python (Join-Path $projectRoot "demo\create_demo_workspace.py") `
   --scenario bugfix `
   --output $demo `
   --force
@@ -33,12 +35,11 @@ git -C $demo commit -m "demo baseline"
 
 ```powershell
 Push-Location $demo
-& "D:\path\to\coding-agent\.venv\Scripts\python.exe" -m pytest -q
+& $python -m pytest -q
 Pop-Location
 ```
 
-Use the actual project path in place of `D:\path\to\coding-agent`. The failure
-shows that `calc.add` subtracts instead of adding.
+The failure shows that `calc.add` subtracts instead of adding.
 
 ## 4. Run the coding agent
 
@@ -47,7 +48,7 @@ the recording.
 
 ```powershell
 $env:DEEPSEEK_API_KEY = "<your-key>"
-.\.venv\Scripts\python.exe .\main.py `
+& $python (Join-Path $projectRoot "main.py") `
   --workspace $demo `
   "Fix the failing tests in this workspace. Inspect the code, make the smallest correct change, run the tests, and finish only after verification succeeds."
 ```
@@ -71,7 +72,7 @@ After the agent finishes, run the test suite yourself:
 
 ```powershell
 Push-Location $demo
-& "D:\path\to\coding-agent\.venv\Scripts\python.exe" -m pytest -q
+& $python -m pytest -q
 git diff --check
 git diff
 Pop-Location

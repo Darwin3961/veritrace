@@ -1,4 +1,4 @@
-# Architecture
+# VeriTrace Architecture
 
 ## 1. Goals
 
