@@ -48,11 +48,9 @@ Core concepts:
 - `AgentLoop`: owns iteration, tool dispatch, observation feedback,
   and termination.
 
-## Current Scope
+## Implemented Scope
 
-Required implementation:
-
-- native tool calling
+- native model tool calling
 - conversation/history management
 - `list_files`
 - `search_code`
@@ -60,23 +58,21 @@ Required implementation:
 - `edit_file`
 - `write_file`
 - `run_command`
-- normalized `ToolResult`
+- normalized `ToolResult` observations
 - tool errors returned as observations
 - max-step termination
 - command timeout
 - output truncation
 - workspace boundary enforcement
+- deterministic safety policy
 - structured JSONL trace
 - Rich terminal rendering
-- Git diff display
-- test/verification loop
+- Git status/diff presentation
+- verification based on observed test evidence
+- lightweight repeated-action/no-progress detection
+- deterministic coding-task evaluation and internal benchmark capability
 
-Optional only after the required scope is stable:
-
-- lightweight no-progress detection
-- small internal benchmark
-
-Do not implement unless explicitly requested:
+## Intentionally Out of Scope
 
 - Multi-Agent
 - RAG/vector database
@@ -142,7 +138,7 @@ Before completing a coding task:
 
 ## Git Workflow
 
-This assessment requires preserving the real development history.
+Preserve the repository's real development history.
 
 - Work on `main`.
 - Each real development stage should have a focused commit.
