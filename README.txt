@@ -1,14 +1,26 @@
-VeriTrace 使用说明
+VeriTrace
 
-仓库：https://github.com/Darwin3961/veritrace
-环境：Python 3.10+，支持 Windows 与 POSIX。安装：python -m venv .venv，然后激活虚拟环境并执行 pip install -r requirements.txt。
+一个以执行事实为核心的可验证 Coding Agent：自主理解代码、受控修改仓库，并以真实运行证据验证结果。
 
-配置：在当前 shell 设置 DEEPSEEK_API_KEY；可选设置 MODEL_BASE_URL 和 MODEL_NAME。程序不会自动加载 .env，请勿提交真实密钥。
+让每一步执行都有边界、每一次行为都有轨迹、每一个完成结论都有证据。
 
-运行：python main.py --workspace PATH "Fix the failing tests and verify the result."
+【Git 仓库】
+https://github.com/Darwin3961/veritrace
 
-核心功能：原生 Tool Calling、本地文件搜索/读写、唯一精确文本替换、本地命令执行、超时与进程树终止、输出截断、结构化 JSONL Trace、脱敏、运行指标、重复动作终止、Rich 实时界面、Git diff 和基于实际命令结果的 Verification。
+【运行方式】
+Python 3.12+；安装依赖：pip install -r requirements.txt
+设置环境变量 DEEPSEEK_API_KEY；MODEL_BASE_URL、MODEL_NAME 可选。
+运行示例：python main.py --workspace <项目目录> "Fix the failing tests and verify the result."
 
-安全：文件操作受 workspace 边界限制；SafetyPolicy 会阻止常见敏感文件、环境变量导出和明显危险命令。它只是确定性的 best-effort 防护，不是操作系统 sandbox。
+【设计亮点】
+VeriTrace 关注的不只是“让模型调用工具”，而是围绕真实执行事实构建 Control—Trace—Verify 闭环，使 Coding Agent 的行为更可控、过程更透明、结果更可信。
 
-Demo：python demo/create_demo_workspace.py --scenario bugfix --output PATH。可选场景为 bugfix、implement、multi_file；随后运行 Agent 并独立执行 pytest 验证。详细步骤见 docs/DEMO.md。
+1. 可控执行（Control）：自研 AgentLoop、ConversationContext、ToolRegistry 与 Tool Calling 解析；文件和命令均在本地执行，并通过 workspace 边界、敏感文件保护、危险命令策略及 timeout 约束风险。
+2. 全链路追踪（Trace）：工具结果统一为 ToolResult，并进一步记录为 append-only Event。Trace、Metrics 与 Rich CLI 均由结构化执行事实驱动，让一次 Agent 运行从“黑盒过程”变成可审计、可回看、可解释的执行轨迹。
+3. 证据驱动验证（Verify）：Verification 不把模型的“任务已完成”直接视为成功，而是依据真实命令结果、exit code、timeout 与工作区变化生成验证状态，将模型声明与执行证据分离。
+4. 可复现评测（Reproduce）：围绕 bugfix、implement、multi_file 三类 Coding 场景建立可复现评测。
+
+【工程验证】
+当自动测试 355 passed、1 skipped，并完成 12/12 次真实模型端到端运行验证。
+
+仓库首页提供动态 Demo、架构图、Quick Start、完整设计说明及 Safety / Limitations。
