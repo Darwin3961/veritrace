@@ -30,7 +30,7 @@ REQUIRED_FILES = (
     "docs/ARCHITECTURE.md",
     "docs/DEMO.md",
     "docs/VIDEO_SCRIPT.md",
-    "docs/INTERVIEW_NOTES.md",
+    "docs/DESIGN_RATIONALE.md",
     "scripts/release_check.py",
     "scripts/create_submission_zip.py",
 )
