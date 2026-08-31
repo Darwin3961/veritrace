@@ -1,73 +1,39 @@
-# AI Usage and Development Assistance
+# AI 工具使用说明
 
-## 1. Purpose
+## 一、说明目的
 
-VeriTrace uses AI in two distinct roles: an LLM participates in agent runs, and
-AI-assisted development tools contributed to building the repository. This
-document makes both roles explicit and describes the review boundary applied to
-their output.
+本文件用于说明 VeriTrace 项目在开发、测试和文档整理过程中对 AI 工具的使用情况，并说明项目运行时大语言模型与开发阶段 AI 编程辅助工具之间的区别。
 
-## 2. Runtime Model Usage
+## 二、使用的 AI 工具
 
-At runtime, VeriTrace calls an LLM through an OpenAI-compatible client interface.
-The current examples and defaults target DeepSeek, while `ModelAdapter` isolates
-provider-specific request and response formats from the rest of the agent. The
-model reasons over conversation history and may return native tool/function
-calls, which the adapter normalizes into project-owned `ToolCall` objects.
+本项目在开发和调试过程中主要使用了以下 AI 工具：
 
-The remote model does not directly edit the workspace or execute commands on a
-provider-hosted machine. Local VeriTrace code owns:
+- ChatGPT：用于需求理解、方案讨论、技术问题分析、文档整理和工程操作辅助。
+- Codex：用于辅助代码实现、局部修改、测试排查、文档完善和 Git 提交流程检查。
+- DeepSeek：作为 VeriTrace 运行时调用的大语言模型，通过 OpenAI-compatible API 接入，负责理解任务、推理并发起原生 Tool Calling。
 
-- workspace file access and exact edits;
-- command execution, timeout handling, and output bounds;
-- tool schemas, dispatch, and normalized `ToolResult` observations;
-- conversation and tool-call history management;
-- deterministic safety-policy checks;
-- event tracing, metrics, termination, and no-progress handling;
-- verification summaries derived from observed execution facts.
+## 三、AI 工具使用场景
 
-The model proposes actions; the local runtime decides whether and how to execute
-them. `SafetyPolicy` reduces obvious risk but is a deterministic best-effort
-guard, not an operating-system sandbox.
+AI 工具主要用于以下工作：
 
-## 3. AI-Assisted Development
+1. 辅助理解 Coding Agent 的任务要求、实现约束和禁止使用的框架范围；
+2. 辅助设计 AgentLoop、ConversationContext、ToolRegistry、SafetyPolicy、Trace 和 Verification 等模块；
+3. 辅助生成和修改部分代码，并根据实际测试结果继续排查和调整；
+4. 辅助设计测试、分析失败原因以及检查回归结果；
+5. 辅助整理 README、架构说明、演示材料和 Git 提交流程。
 
-AI-assisted tools, including ChatGPT and Codex, were used during development of
-VeriTrace. Their assistance included interpreting requirements and constraints,
-architecture discussion and design review, implementation support, generating or
-refining local code changes, debugging failures, test design and regression
-analysis, documentation organization and wording, and Git/release workflow
-support.
+项目运行时使用的大语言模型只负责推理和请求工具调用。文件访问、代码修改、命令执行、上下文管理、工具分发、安全检查、执行轨迹记录和结果验证均由 VeriTrace 本地代码完成，模型不会直接通过服务端环境操作本地仓库。
 
-This assistance was substantive and was not limited to documentation polishing.
-AI suggestions were treated as proposals to inspect, adapt, test, or reject—not
-as automatically correct changes and not as evidence that a task was complete.
+## 四、人工审核与责任说明
 
-## 4. Review and Verification
+AI 工具在本项目中不仅用于文字整理，也参与了部分代码实现和修改建议。所有 AI 生成或辅助修改的内容均由开发者进行检查，并通过实际运行结果进行验证。
 
-AI-assisted changes were reviewed in the repository and checked against actual
-local behavior. Depending on the change, validation included:
+项目主要通过 `pytest`、`git diff`、`git diff --check`、确定性测试场景以及结构化执行轨迹等方式检查实现结果。模型自身给出的“任务完成”或“测试通过”等自然语言结论，不直接作为正确性证据。
 
-- focused and full `pytest` runs;
-- deterministic coding-task scenarios with independent verification commands;
-- `git diff` review and `git diff --check`;
-- append-only structured execution traces and metrics;
-- paired `tool_call` / `tool_result` facts used by verification logic;
-- independent command execution where an agent's final statement was not enough.
+项目的架构选择、功能边界、验收标准、最终代码和提交内容均由开发者审核、确认并承担责任。
 
-Model-generated statements are not proof that code is correct. VeriTrace's own
-design follows the same principle: verification status is derived from locally
-observed execution evidence rather than natural-language completion claims.
+## 五、与项目设计的关系
 
-## 5. Responsibility and Limitations
+VeriTrace 的核心目标之一就是使 Coding Agent 的执行过程更加可控、可追踪和可验证。
 
-AI tools are development aids, not independent project authors. Final
-architectural choices, acceptance criteria, repository state, and responsibility
-for submitted or published work remain with the project developer. AI assistance
-does not bypass VeriTrace's local execution, policy, tracing, or verification
-boundaries.
-
-Models can produce incorrect code, incomplete tests, misleading explanations, or
-unsafe suggestions. Their output therefore requires inspection and empirical
-verification. This document is a voluntary transparency record; it does not
-claim that AI assistance guarantees quality or correctness.
+因此，无论是开发阶段使用 AI 编程工具，还是运行阶段由大语言模型发起 Tool Calling，最终都需要以真实的本地执行结果作为判断依据，而不是直接相信模型生成的结论。
