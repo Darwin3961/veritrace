@@ -64,7 +64,7 @@ def test_readme_uses_truthful_hero_demo_and_architecture():
     assert "376 Tests" in hero
     assert "docs/assets/veritrace-hero.gif" in hero
     assert "veritrace-hero-preview.png" not in readme
-    assert "condensed visualization of a reproducible" in readme
+    assert "可复现执行流程的浓缩展示" in readme
     assert "```mermaid" not in readme
     assert "docs/assets/veritrace-architecture.svg" in readme
     assert "ToolResult` — normalized execution observation" in readme
@@ -162,9 +162,7 @@ def test_readme_states_best_effort_policy_is_not_a_sandbox():
 
 def test_readme_marks_unimplemented_features_as_limitations():
     readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
-    limitation = (
-        "advanced orchestration features such as multi-agent execution, rag, mcp"
-    )
+    limitation = "multi-agent、rag、mcp 和 long-term memory 等高级编排能力不在当前范围内"
 
     assert limitation in readme
 

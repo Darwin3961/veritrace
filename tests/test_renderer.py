@@ -815,6 +815,7 @@ def test_pytest_output_uses_safe_summary_or_bounded_fallback():
 
 def test_command_details_projects_latest_event_without_mutation(tmp_path):
     renderer, stream = make_renderer(workspace_root=tmp_path)
+    fake_secret = "sk-" + "DETAIL_SECRET_1234"
     events = [
         make_event(
             "tool_call",
@@ -852,7 +853,7 @@ def test_command_details_projects_latest_event_without_mutation(tmp_path):
                 "ok": False,
                 "output": (
                     f"workspace={tmp_path}\n"
-                    "token=sk-DETAIL_SECRET_1234\nLATEST_COMMAND_OUTPUT"
+                    f"token={fake_secret}\nLATEST_COMMAND_OUTPUT"
                 ),
                 "error": "command exited with code 9",
                 "metadata": {"exit_code": 9},
@@ -869,7 +870,7 @@ def test_command_details_projects_latest_event_without_mutation(tmp_path):
     assert "LATEST_COMMAND_OUTPUT" in output
     assert "FIRST_COMMAND_OUTPUT" not in output
     assert "[REDACTED]" in output
-    assert "sk-DETAIL_SECRET_1234" not in output
+    assert fake_secret not in output
     assert str(tmp_path) not in output
     assert "exit code 9" in output
     assert [event.to_dict() for event in events] == original

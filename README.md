@@ -29,8 +29,8 @@ Git 变化和结构化 Trace 构建 Control → Trace → Verify 闭环。
 
 ## Demo · 演示
 
-顶部 Hero GIF remains a condensed visualization of a reproducible execution flow，
-是对 VeriTrace 执行闭环的编排展示，不是伪造的原始终端录屏。
+顶部 Hero GIF 是对可复现执行流程的浓缩展示，用于说明 VeriTrace 的执行闭环，
+并非伪造的原始终端录屏。
 最终视频演示使用一个独立的本地 Python 小项目 **Sprout Demo**，初始状态为：
 
 ```text
@@ -265,9 +265,6 @@ Agent benchmark。**
 - 项目面向 small / medium 本地 Coding 任务，不适合超大仓库的全量语义上下文。
 - 没有 persistent interactive shell，任务成功仍受模型行为与本地环境影响。
 - Multi-Agent、RAG、MCP 和 long-term memory 等高级编排能力不在当前范围内。
-
-Advanced orchestration features such as multi-agent execution, RAG, MCP integration,
-and long-term memory are intentionally out of scope.
 
 ## Project Structure · 项目结构
 
