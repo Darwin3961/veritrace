@@ -66,6 +66,17 @@ The final presentation includes:
 - read-only Git status, diff statistics, and bounded diff;
 - the append-only JSONL trace path.
 
+For an interactive session, omit the positional task:
+
+```powershell
+& $python (Join-Path $projectRoot "main.py") --workspace $demo
+```
+
+The prompt accepts repeated independent tasks. `/status`, `/trace`, and
+`/verify` show compact projections of the most recent run; `/help` lists all
+available commands. The one-shot command above remains the recommended path for
+a reproducible recording.
+
 ## 6. Verify independently
 
 After the agent finishes, run the test suite yourself:

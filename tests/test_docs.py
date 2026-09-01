@@ -61,7 +61,7 @@ def test_readme_uses_truthful_hero_demo_and_architecture():
     assert "Model claims are not execution facts" in hero
     assert hero.count("img.shields.io") == 4
     assert badge_row.count("<img ") == 4
-    assert "355 Tests" in hero
+    assert "376 Tests" in hero
     assert "docs/assets/veritrace-hero.gif" in hero
     assert "veritrace-hero-preview.png" not in readme
     assert "condensed visualization of a reproducible" in readme

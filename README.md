@@ -13,7 +13,7 @@ controlled local execution, structured tracing, and evidence-based verification.
   <a href="https://www.python.org/"><img alt="Python 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&amp;logoColor=white"></a>
   <a href="#how-veritrace-works"><img alt="No Agent Framework" src="https://img.shields.io/badge/Agent_Framework-none-555555"></a>
   <a href="#why-veritrace"><img alt="Local Execution" src="https://img.shields.io/badge/Execution-local-0A7E8C"></a>
-  <a href="#evaluation"><img alt="355 Tests" src="https://img.shields.io/badge/Tests-355_passing-2E8B57"></a>
+  <a href="#evaluation"><img alt="376 Tests" src="https://img.shields.io/badge/Tests-376_passing-2E8B57"></a>
 </p>
 
 [Demo](#demo) · [Why VeriTrace?](#why-veritrace) · [How It Works](#how-veritrace-works) · [Features](#features) · [Quick Start](#quick-start) · [Evaluation](#evaluation) · [Limitations](#safety-and-limitations)
@@ -129,6 +129,10 @@ $env:DEEPSEEK_API_KEY = "<your-key>"
 $env:MODEL_BASE_URL = "https://api.deepseek.com"
 $env:MODEL_NAME = "deepseek-v4-flash"
 
+# Interactive
+python main.py --workspace <path>
+
+# One-shot
 python main.py --workspace <path> "Fix the failing tests and verify the result."
 ```
 
@@ -146,6 +150,11 @@ export MODEL_NAME="deepseek-v4-flash"
 python main.py --workspace ./demo-project \
   "Fix the failing tests, make the smallest correct change, and verify the result."
 ```
+
+In Rich mode, omitting the task starts the interactive CLI. It accepts repeated
+independent tasks and provides slash-command completion for `/help`, `/status`,
+`/trace`, `/verify`, `/clear`, and `/exit`. Plain mode remains a single-run,
+automation-friendly interface.
 
 Set environment variables in your shell. VeriTrace does not automatically load
 `.env` files. `MODEL_BASE_URL` and `MODEL_NAME` are optional overrides;
@@ -171,7 +180,7 @@ text.
 
 | Evaluation | Result |
 |---|---:|
-| Automated tests | 355 passed, 1 skipped |
+| Automated tests | 376 passed, 1 skipped |
 | Reproducible scenarios | 3 (`bugfix`, `implement`, `multi_file`) |
 | Recorded live model runs | 12 / 12 passed |
 

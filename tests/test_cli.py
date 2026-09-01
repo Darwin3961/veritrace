@@ -142,16 +142,29 @@ class FakeGitInspector:
         return self.summary
 
 
+class FakeInteractiveCLI:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.__class__.instances.append(self)
+
+    def run(self):
+        return 0
+
+
 def install_fakes(monkeypatch):
     FakeToolRegistry.instances.clear()
     FakeAgentLoop.instances.clear()
     FakeRenderer.instances.clear()
     FakeGitInspector.instances.clear()
+    FakeInteractiveCLI.instances.clear()
     monkeypatch.setattr(main_module, "ModelAdapter", FakeModelAdapter)
     monkeypatch.setattr(main_module, "ToolRegistry", FakeToolRegistry)
     monkeypatch.setattr(main_module, "AgentLoop", FakeAgentLoop)
     monkeypatch.setattr(main_module, "RichRenderer", FakeRenderer)
     monkeypatch.setattr(main_module, "GitInspector", FakeGitInspector)
+    monkeypatch.setattr(main_module, "InteractiveCLI", FakeInteractiveCLI)
 
 
 def test_cli_default_uses_rich_event_sink_and_final_render(
@@ -194,12 +207,12 @@ def test_cli_default_uses_rich_event_sink_and_final_render(
     assert renderer.kwargs["model_name"] == "fake-model"
 
 
-def test_cli_reads_task_from_input(monkeypatch, tmp_path: Path):
+def test_cli_plain_reads_task_from_input(monkeypatch, tmp_path: Path):
     install_fakes(monkeypatch)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["main.py", "--workspace", str(tmp_path)],
+        ["main.py", "--plain", "--workspace", str(tmp_path)],
     )
     monkeypatch.setattr("builtins.input", lambda _prompt: "Input task")
 
@@ -209,7 +222,7 @@ def test_cli_reads_task_from_input(monkeypatch, tmp_path: Path):
 
 def test_cli_rejects_empty_task(monkeypatch, capsys):
     install_fakes(monkeypatch)
-    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(sys, "argv", ["main.py", "--plain"])
     monkeypatch.setattr("builtins.input", lambda _prompt: "   ")
 
     exit_code = main_module.main()
@@ -218,6 +231,25 @@ def test_cli_rejects_empty_task(monkeypatch, capsys):
     assert "task must not be empty" in capsys.readouterr().err
     assert FakeAgentLoop.instances == []
     assert FakeRenderer.instances == []
+
+
+def test_cli_rich_without_task_enters_interactive_mode(
+    monkeypatch,
+    tmp_path: Path,
+):
+    install_fakes(monkeypatch)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["main.py", "--workspace", str(tmp_path)],
+    )
+
+    assert main_module.main() == 0
+    interactive = FakeInteractiveCLI.instances[0]
+    assert interactive.kwargs["agent"] is FakeAgentLoop.instances[0]
+    assert interactive.kwargs["renderer"] is FakeRenderer.instances[0]
+    assert interactive.kwargs["workspace"] == tmp_path.resolve()
+    assert FakeAgentLoop.instances[0].tasks == []
 
 
 def test_cli_plain_mode_prints_complete_summary(
@@ -258,6 +290,8 @@ def test_cli_plain_mode_prints_complete_summary(
     assert "Git diff stat:" in output
     assert "Git diff:" in output
     assert "\x1b[" not in output
+    assert "(•◡•)" not in output
+    assert "\\|/" not in output
 
 
 def test_cli_no_diff_skips_git_inspector(monkeypatch, tmp_path: Path):

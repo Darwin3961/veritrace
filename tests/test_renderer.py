@@ -680,14 +680,41 @@ def test_long_command_output_uses_rich_head_and_tail_without_mutation():
 
     rendered = stream.getvalue()
     assert "line-0" in rendered
-    assert "line-4" in rendered
-    assert "8 lines omitted" in rendered
-    assert "line-5" not in rendered
-    assert "line-12" not in rendered
-    assert "line-13" in rendered
+    assert "line-3" in rendered
+    assert "10 lines omitted" in rendered
+    assert "line-4" not in rendered
+    assert "line-13" not in rendered
+    assert "line-14" in rendered
     assert "line-17" in rendered
     assert "✗ Command exited with code 1" in rendered
     assert event.data["output"] == output
+
+
+def test_successful_command_output_keeps_summary_with_tighter_limit():
+    renderer, stream = make_renderer()
+    output = "\n".join(f"line-{index}" for index in range(12))
+
+    renderer.handle_event(
+        make_event(
+            "tool_result",
+            data={
+                "tool_name": "run_command",
+                "ok": True,
+                "output": output,
+                "metadata": {"exit_code": 0},
+            },
+        )
+    )
+
+    rendered = stream.getvalue()
+    assert "line-0" in rendered
+    assert "line-1" in rendered
+    assert "7 lines omitted" in rendered
+    assert "line-2" not in rendered
+    assert "line-8" not in rendered
+    assert "line-9" in rendered
+    assert "line-11" in rendered
+    assert "✓ exit code 0" in rendered
 
 
 def test_empty_command_output_is_not_rendered():
@@ -910,6 +937,7 @@ def test_final_summary_is_compact_safe_and_does_not_invent_tests(tmp_path):
 
     output = stream.getvalue()
     assert "✓ Task completed" in output
+    assert "VERIFIED" not in output
     assert injected in output
     assert "Tests             not run" in output
     assert "2 steps · 1 tool · 10.7k tokens · 4.2s" in output
@@ -1253,3 +1281,189 @@ def test_large_compact_diff_is_summary_only():
     assert "line-0" not in output
     assert "line-60" not in output
     assert len(output) < 350
+
+
+def test_interactive_mode_suppresses_per_task_header_and_task_echo(tmp_path):
+    renderer, stream = make_renderer(workspace_root=tmp_path)
+    renderer.set_interactive_mode(True)
+    renderer.render_header()
+    renderer.handle_event(make_event("session_start"))
+    renderer.handle_event(
+        make_event("user_task", seq=2, data={"task": "private task text"})
+    )
+
+    output = stream.getvalue()
+    assert output.count("VeriTrace") == 1
+    assert "private task text" not in output
+    assert "\\|/" in output
+    assert "(•◡•)" in output
+
+
+def test_non_tty_thinking_status_is_silent():
+    renderer, stream = make_renderer()
+
+    renderer.handle_event(make_event("step_start"))
+    renderer.handle_event(make_event("assistant_response", seq=2))
+
+    assert stream.getvalue() == ""
+    assert renderer._thinking_status is None
+
+
+def test_tty_thinking_status_stops_before_tool_activity():
+    stream = io.StringIO()
+    renderer = RichRenderer(
+        console=Console(
+            file=stream,
+            force_terminal=True,
+            color_system=None,
+            width=100,
+        )
+    )
+
+    renderer.handle_event(make_event("step_start"))
+    assert renderer._thinking_status is not None
+    renderer.handle_event(
+        make_event(
+            "tool_call",
+            seq=2,
+            data={
+                "call_id": "read",
+                "name": "read_file",
+                "arguments": {"path": "app.py"},
+            },
+        )
+    )
+
+    assert renderer._thinking_status is None
+    assert "Read  app.py" not in stream.getvalue()
+
+
+def test_model_error_cleans_up_thinking_status():
+    stream = io.StringIO()
+    renderer = RichRenderer(
+        console=Console(
+            file=stream,
+            force_terminal=True,
+            color_system=None,
+            width=100,
+        )
+    )
+    renderer.handle_event(make_event("step_start"))
+    renderer.handle_event(
+        make_event("model_error", seq=2, data={"consecutive_errors": 1})
+    )
+
+    assert renderer._thinking_status is None
+    assert "Model response error" in stream.getvalue()
+
+
+def test_verified_title_requires_ordered_successful_test_evidence(tmp_path):
+    renderer, stream = make_renderer(show_tool_output=False)
+    record_test_result(renderer, seq=1, call_id="passed", ok=True)
+
+    renderer.render_final(
+        result="Done.",
+        metrics={},
+        stop_reason="completed",
+        verification=VerificationSummary(
+            successful_commands=1,
+            tests_likely_ran=True,
+            successful_test_commands=1,
+            last_command_exit_code=0,
+        ),
+        git_summary=None,
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    output = stream.getvalue()
+    assert "✓ VERIFIED" in output
+    assert "Supported by execution evidence." in output
+    assert "Exit code         0" in output
+    assert "Trace             recorded" in output
+
+
+def test_completed_without_test_evidence_is_not_verified():
+    renderer, stream = make_renderer()
+
+    renderer.render_verification(
+        metrics={},
+        stop_reason="completed",
+        verification=VerificationSummary(),
+        trace_path=None,
+    )
+
+    output = stream.getvalue()
+    assert "Task completed" in output
+    assert "VERIFIED" not in output
+    assert "No successful test evidence found." in output
+
+
+def test_trace_projection_is_bounded_and_does_not_dump_json(tmp_path):
+    renderer, stream = make_renderer()
+    events = []
+
+    for index in range(10):
+        call_seq = index * 2 + 1
+        events.extend(
+            [
+                make_event(
+                    "tool_call",
+                    seq=call_seq,
+                    data={
+                        "call_id": f"call-{index}",
+                        "name": "read_file",
+                        "arguments": {"path": f"file-{index}.py"},
+                    },
+                ),
+                make_event(
+                    "tool_result",
+                    seq=call_seq + 1,
+                    source_seq=call_seq,
+                    data={
+                        "call_id": f"call-{index}",
+                        "tool_name": "read_file",
+                        "ok": index != 9,
+                        "metadata": {},
+                    },
+                ),
+            ]
+        )
+
+    renderer.render_trace(events, tmp_path / "trace.jsonl")
+
+    output = stream.getvalue()
+    assert "Trace" in output
+    assert "2 earlier actions" in output
+    assert "03  Read  file-2.py" in output
+    assert "10  Read  file-9.py" in output
+    assert "10 actions · 0 edits · 0 commands" in output
+    assert "trace.jsonl" in output
+    assert "call_id" not in output
+
+
+def test_final_git_summary_omits_patch_after_live_edit_preview():
+    renderer, stream = make_renderer()
+    renderer.render_final(
+        result="Done.",
+        metrics={},
+        stop_reason="completed",
+        verification=VerificationSummary(),
+        git_summary=GitSummary(
+            is_repo=True,
+            status_short=" M app.py",
+            diff_stat="1 file changed, 1 insertion(+), 1 deletion(-)",
+            diff_text=(
+                "diff --git a/app.py b/app.py\n"
+                "@@ -1 +1 @@\n"
+                "-old\n"
+                "+new"
+            ),
+        ),
+        trace_path=None,
+    )
+
+    output = stream.getvalue()
+    assert "Changes" in output
+    assert "1 file changed · +1 -1" in output
+    assert "- old" not in output
+    assert "+ new" not in output

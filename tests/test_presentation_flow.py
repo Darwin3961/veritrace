@@ -180,7 +180,7 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
     assert "✓ applied" in output
     assert "$ " in output
     assert "1 passed" in output
-    assert "✓ Task completed" in output
+    assert "✓ VERIFIED" in output
     assert "Final test run    ✓ passed" in output
     assert "Test history      1 passed · 1 failed" in output
     assert "6 steps · 5 tools" in output
@@ -188,4 +188,5 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
     assert "Changes" in output
     assert "Coding Agent Session" not in output
     assert output.count("┌") + output.count("╭") == 2
+    assert "Diff\n" not in output
     assert "Regression reproduced" not in output

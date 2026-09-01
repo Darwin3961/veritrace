@@ -68,8 +68,11 @@ class RichRenderer:
     PATCH_PREVIEW_CHARS = 1200
     PATCH_LINE_CHARS = 180
     PASSIVE_TOOLS = {"list_files", "search_code", "read_file"}
-    COMMAND_OUTPUT_LINES = 12
-    COMMAND_OUTPUT_EDGE_LINES = 5
+    SUCCESS_COMMAND_OUTPUT_LINES = 6
+    FAILURE_COMMAND_OUTPUT_LINES = 10
+    SUCCESS_COMMAND_HEAD_LINES = 2
+    SUCCESS_COMMAND_TAIL_LINES = 3
+    FAILURE_COMMAND_EDGE_LINES = 4
     FINAL_ANSWER_LINES = 6
     COMPACT_DIFF_LINES = 20
     MEDIUM_DIFF_LINES = 60
@@ -92,6 +95,7 @@ class RichRenderer:
         workspace_root: str | Path | None = None,
         model_name: str | None = None,
         unicode_symbols: bool | None = None,
+        trace_enabled: bool = True,
     ):
         if max_output_chars < 100:
             raise ValueError(
@@ -107,6 +111,9 @@ class RichRenderer:
             else None
         )
         self.model_name = model_name
+        self.trace_enabled = trace_enabled
+        self.interactive_mode = False
+        self._thinking_status = None
         self.unicode_symbols = (
             self._supports_unicode()
             if unicode_symbols is None
@@ -117,6 +124,7 @@ class RichRenderer:
         self._pending_passive_tools: dict[str, str] = {}
         self._pending_test_commands: set[str] = set()
         self._test_results: list[bool] = []
+        self._last_test_exit_code: int | None = None
 
     def _supports_unicode(self) -> bool:
         encoding = getattr(self.console, "encoding", None) or "utf-8"
@@ -211,13 +219,24 @@ class RichRenderer:
 
         return self._inline(branch)
 
-    def _render_header(self) -> None:
+    @property
+    def task_symbol(self) -> str:
+        return self._symbol("task")
+
+    def set_interactive_mode(self, enabled: bool) -> None:
+        self.interactive_mode = enabled
+
+    def render_header(self) -> None:
         branch = self._read_git_branch()
-        header = Text(
+        face = "(•◡•)" if self.unicode_symbols else "(o.o)"
+        header = Text(" \\|/   ", style="bright_cyan")
+        header.append(
             f"{self._symbol('signature')} VeriTrace",
-            style="bold cyan",
+            style="bold bright_white",
         )
-        header.append("\n  ")
+        header.append(f"\n{face}  ", style="cyan")
+        header.append("Verifiable Coding Agent", style="dim")
+        header.append("\n\n       ")
 
         if branch:
             header.append(branch, style="dim cyan")
@@ -230,7 +249,7 @@ class RichRenderer:
 
         if self.model_name:
             header.append("\n")
-            model = Text("  model       ", style="dim")
+            model = Text("       model       ", style="dim")
             model.append(self._inline(self.model_name), style="dim")
             header.append_text(model)
 
@@ -250,12 +269,24 @@ class RichRenderer:
                 or sanitize_display_path(self.workspace_root, max_chars=40)
             )
             header.append("\n")
-            workspace = Text("  workspace   ", style="dim")
+            workspace = Text("       workspace   ", style="dim")
             workspace.append(
                 workspace_name,
                 style="dim",
             )
             header.append_text(workspace)
+
+        header.append("\n")
+        safety = Text("       safety      ", style="dim")
+        safety.append("controlled", style="dim cyan")
+        header.append_text(safety)
+        header.append("\n")
+        trace = Text("       trace       ", style="dim")
+        trace.append(
+            "enabled" if self.trace_enabled else "disabled",
+            style="dim green" if self.trace_enabled else "dim yellow",
+        )
+        header.append_text(trace)
 
         self.console.print(
             Panel(
@@ -270,6 +301,38 @@ class RichRenderer:
                 expand=False,
             )
         )
+
+    def start_thinking(self) -> None:
+        if self._thinking_status is not None or not self.console.is_terminal:
+            return
+
+        label = Text("VeriTrace  thinking…", style="dim cyan")
+        self._thinking_status = self.console.status(label, spinner="dots")
+        self._thinking_status.start()
+
+    def stop_thinking(self) -> None:
+        status = self._thinking_status
+        self._thinking_status = None
+
+        if status is not None:
+            status.stop()
+
+    def clear(self) -> None:
+        self.stop_thinking()
+        self.console.clear()
+
+    def render_notice(self, message: str, *, style: str = "dim") -> None:
+        self.console.print(Text(message, style=style))
+
+    def render_help(self, commands: dict[str, str]) -> None:
+        heading = Text("Commands ", style="bold cyan")
+        heading.append(self._symbol("separator") * 22, style="dim")
+        self.console.print(heading)
+
+        for command, description in commands.items():
+            line = Text(f"  {command:<10}", style="cyan")
+            line.append(description, style="dim")
+            self.console.print(line)
 
     def _tool_presentation(
         self,
@@ -352,16 +415,21 @@ class RichRenderer:
             rendered.append(line, style=style)
             self.console.print(rendered)
 
-    def _print_command_text(self, value: object) -> None:
+    def _print_command_text(self, value: object, *, ok: bool) -> None:
         lines = str(value).splitlines()
 
-        if len(lines) > self.COMMAND_OUTPUT_LINES:
-            omitted = len(lines) - (self.COMMAND_OUTPUT_EDGE_LINES * 2)
-            visible: list[str | None] = (
-                lines[: self.COMMAND_OUTPUT_EDGE_LINES]
-                + [None]
-                + lines[-self.COMMAND_OUTPUT_EDGE_LINES :]
-            )
+        if ok:
+            limit = self.SUCCESS_COMMAND_OUTPUT_LINES
+            head = self.SUCCESS_COMMAND_HEAD_LINES
+            tail = self.SUCCESS_COMMAND_TAIL_LINES
+        else:
+            limit = self.FAILURE_COMMAND_OUTPUT_LINES
+            head = self.FAILURE_COMMAND_EDGE_LINES
+            tail = self.FAILURE_COMMAND_EDGE_LINES
+
+        if len(lines) > limit:
+            omitted = len(lines) - head - tail
+            visible: list[str | None] = lines[:head] + [None] + lines[-tail:]
         else:
             omitted = 0
             visible = list(lines)
@@ -578,6 +646,10 @@ class RichRenderer:
             and call_id in self._pending_test_commands
         ):
             self._pending_test_commands.discard(call_id)
+            exit_code = metadata.get("exit_code")
+            self._last_test_exit_code = (
+                exit_code if isinstance(exit_code, int) else None
+            )
             self._test_results.append(
                 ok
                 and metadata.get("exit_code") == 0
@@ -638,7 +710,7 @@ class RichRenderer:
                 display_parts.append(str(error))
 
             if display_parts:
-                self._print_command_text("\n".join(display_parts))
+                self._print_command_text("\n".join(display_parts), ok=ok)
 
         if policy_blocked:
             line = Text(
@@ -672,7 +744,12 @@ class RichRenderer:
                 return
 
             if name == "run_command":
-                completed = "Command completed"
+                exit_code = metadata.get("exit_code")
+                completed = (
+                    f"exit code {exit_code}"
+                    if isinstance(exit_code, int)
+                    else "Command completed"
+                )
             elif name == "write_file":
                 completed = "written"
             else:
@@ -711,16 +788,33 @@ class RichRenderer:
         self._print_indented(error, style="red")
 
     def handle_event(self, event: Event) -> None:
+        if event.type in {
+            "assistant_response",
+            "tool_call",
+            "tool_result",
+            "model_error",
+            "no_progress",
+            "session_end",
+        }:
+            self.stop_thinking()
+
         if event.type == "session_start":
+            self.stop_thinking()
             self._tool_presentations.clear()
             self._pending_edits.clear()
             self._pending_passive_tools.clear()
             self._pending_test_commands.clear()
             self._test_results.clear()
-            self._render_header()
+            self._last_test_exit_code = None
+
+            if not self.interactive_mode:
+                self.render_header()
             return
 
         if event.type == "user_task":
+            if self.interactive_mode:
+                return
+
             self.console.print()
             task = Text(f"{self._symbol('task')} ", style="bold cyan")
             task.append(str(event.data.get("task", "")))
@@ -729,6 +823,10 @@ class RichRenderer:
             return
 
         if event.type == "step_start":
+            self.start_thinking()
+            return
+
+        if event.type == "assistant_response":
             return
 
         if event.type == "tool_call":
@@ -760,7 +858,15 @@ class RichRenderer:
                 )
             )
 
-    def render_git_summary(self, summary: GitSummary) -> None:
+        if event.type == "session_end":
+            self.stop_thinking()
+
+    def render_git_summary(
+        self,
+        summary: GitSummary,
+        *,
+        include_diff: bool = True,
+    ) -> None:
         if not summary.is_repo:
             if summary.error:
                 self.console.print(
@@ -795,7 +901,7 @@ class RichRenderer:
                 self.console.print(Text("Diff summary", style="bold"))
                 self._print_indented(summary.diff_stat, style="dim")
 
-        if summary.diff_text:
+        if include_diff and summary.diff_text:
             self.console.print()
             self._render_compact_diff(summary.diff_text)
 
@@ -983,6 +1089,7 @@ class RichRenderer:
                 "presentation ..."
             )
 
+        self.console.print(Text("Assistant:", style="bold cyan"))
         self.console.print(Text("\n".join(visible)))
 
     def _panel_row(
@@ -997,14 +1104,33 @@ class RichRenderer:
         body.append(value, style=style)
         body.append("\n")
 
-    def _render_final_panel(
+    def _is_verified(
+        self,
+        *,
+        stop_reason: str | None,
+        verification: VerificationSummary,
+    ) -> bool:
+        return bool(
+            stop_reason == "completed"
+            and verification.tests_likely_ran
+            and self._test_results
+            and self._test_results[-1]
+            and self._last_test_exit_code == 0
+        )
+
+    def render_verification(
         self,
         *,
         metrics: dict,
         stop_reason: str | None,
         verification: VerificationSummary,
+        trace_path: Path | None,
     ) -> None:
         completed = stop_reason == "completed"
+        verified = self._is_verified(
+            stop_reason=stop_reason,
+            verification=verification,
+        )
         body = Text()
 
         if not completed:
@@ -1037,6 +1163,12 @@ class RichRenderer:
                 final_status,
                 style="green" if final_passed else "red",
             )
+            if self._last_test_exit_code is not None:
+                self._panel_row(
+                    body,
+                    "Exit code",
+                    str(self._last_test_exit_code),
+                )
         elif not verification.tests_likely_ran:
             self._panel_row(body, "Tests", "not run", style="dim")
 
@@ -1064,6 +1196,20 @@ class RichRenderer:
             str(verification.policy_blocks),
             style="yellow" if verification.policy_blocks else "",
         )
+        self._panel_row(
+            body,
+            "Trace",
+            "recorded" if trace_path is not None else "disabled",
+            style="green" if trace_path is not None else "dim",
+        )
+
+        if verified:
+            body.append("\nSupported by execution evidence.", style="dim green")
+        elif completed and not verification.tests_likely_ran:
+            body.append(
+                "\nNo successful test evidence found.",
+                style="dim yellow",
+            )
 
         metric_text = self._format_metrics(metrics)
 
@@ -1071,7 +1217,13 @@ class RichRenderer:
             body.append("\n")
             body.append(metric_text, style="dim")
 
-        if completed:
+        if verified:
+            title = Text(
+                f" {self._symbol('success')} VERIFIED ",
+                style="bold green",
+            )
+            border_style = "dim green"
+        elif completed:
             title = Text(
                 f" {self._symbol('success')} Task completed ",
                 style="bold green",
@@ -1100,6 +1252,170 @@ class RichRenderer:
             )
         )
 
+    def _trace_actions(
+        self,
+        events: list[Event],
+    ) -> list[tuple[int, str, bool, bool]]:
+        calls = {
+            event.seq: event
+            for event in events
+            if event.type == "tool_call"
+        }
+        actions: list[tuple[int, str, bool, bool]] = []
+
+        for event in events:
+            if event.type != "tool_result":
+                continue
+
+            call = calls.get(event.source_seq or -1)
+
+            if call is None:
+                continue
+
+            name = str(call.data.get("name", "tool"))
+            arguments = call.data.get("arguments", {})
+
+            if not isinstance(arguments, dict):
+                arguments = {}
+
+            label, _command = self._tool_presentation(name, arguments)
+            metadata = event.data.get("metadata", {})
+
+            if not isinstance(metadata, dict):
+                metadata = {}
+
+            ok = bool(event.data.get("ok", False))
+            warning = bool(
+                metadata.get("policy_blocked", False)
+                or metadata.get("timeout", False)
+            )
+            actions.append(
+                (
+                    len(actions) + 1,
+                    self._inline(label, max_chars=40),
+                    ok,
+                    warning,
+                )
+            )
+
+        return actions
+
+    def render_trace(
+        self,
+        events: list[Event],
+        trace_path: Path | None,
+    ) -> None:
+        actions = self._trace_actions(events)
+
+        if not actions:
+            self.render_notice("No execution trace yet.")
+            return
+
+        heading = Text("Trace ", style="bold cyan")
+        heading.append(self._symbol("separator") * 24, style="dim")
+        self.console.print(heading)
+        visible = actions[-8:]
+        omitted = len(actions) - len(visible)
+
+        if omitted:
+            self.console.print(Text(f"  … {omitted} earlier actions …", style="dim"))
+
+        for number, label, ok, warning in visible:
+            symbol = (
+                self._symbol("warning")
+                if warning
+                else self._symbol("success") if ok else self._symbol("failure")
+            )
+            style = "yellow" if warning else "green" if ok else "red"
+            line = Text(f"{number:02d}  ", style="dim")
+            line.append(f"{label:<42}", style="cyan")
+            line.append(symbol, style=style)
+            self.console.print(line)
+
+        edits = sum(
+            1
+            for event in events
+            if event.type == "tool_call"
+            and event.data.get("name") in {"edit_file", "write_file"}
+        )
+        commands = sum(
+            1
+            for event in events
+            if event.type == "tool_call"
+            and event.data.get("name") == "run_command"
+        )
+        self.console.print()
+        self.console.print(
+            Text(
+                f"{len(actions)} actions · {edits} edits · {commands} commands",
+                style="dim",
+            )
+        )
+
+        if trace_path is not None:
+            trace = Text("trace  ", style="dim")
+            trace.append(sanitize_display_path(trace_path), style="dim")
+            self.console.print(trace)
+
+    def render_status(
+        self,
+        *,
+        task: str | None,
+        stop_reason: str | None,
+        metrics: dict,
+        verification: VerificationSummary | None,
+        git_summary: GitSummary | None,
+        trace_path: Path | None,
+    ) -> None:
+        heading = Text("Status ", style="bold cyan")
+        heading.append(self._symbol("separator") * 23, style="dim")
+        self.console.print(heading)
+        workspace = self.workspace_root.name if self.workspace_root else "-"
+        values = [
+            ("workspace", workspace),
+            ("model", self.model_name or "-"),
+            ("last task", stop_reason or ("not run" if task is None else "unknown")),
+            ("actions", str(int(metrics.get("tool_calls", 0) or 0))),
+        ]
+
+        if git_summary is not None and git_summary.status_short:
+            files_changed = len(git_summary.status_short.splitlines())
+        elif verification is not None:
+            files_changed = verification.successful_file_changes
+        else:
+            files_changed = 0
+
+        commands = (
+            verification.successful_commands + verification.failed_commands
+            if verification is not None
+            else 0
+        )
+        verified = bool(
+            verification is not None
+            and self._is_verified(
+                stop_reason=stop_reason,
+                verification=verification,
+            )
+        )
+        verification_label = (
+            "verified"
+            if verified
+            else "not verified" if task is not None else "not run"
+        )
+        values.extend(
+            [
+                ("files changed", str(files_changed)),
+                ("commands", str(commands)),
+                ("verification", verification_label),
+                ("trace", "saved" if trace_path is not None else "disabled"),
+            ]
+        )
+
+        for label, value in values:
+            line = Text(f"  {label:<15}", style="dim")
+            line.append(value)
+            self.console.print(line)
+
     def render_final(
         self,
         *,
@@ -1110,21 +1426,23 @@ class RichRenderer:
         git_summary: GitSummary | None,
         trace_path: Path | None,
     ) -> None:
+        self.stop_thinking()
         self.console.print()
 
         if result:
             self._render_final_answer(result)
 
         self.console.print()
-        self._render_final_panel(
+        self.render_verification(
             metrics=metrics,
             stop_reason=stop_reason,
             verification=verification,
+            trace_path=trace_path,
         )
 
         if git_summary is not None:
             self.console.print()
-            self.render_git_summary(git_summary)
+            self.render_git_summary(git_summary, include_diff=False)
 
         if trace_path is not None:
             self.console.print()

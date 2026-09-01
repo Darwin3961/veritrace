@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coding_agent.agent import AgentLoop
 from coding_agent.git_utils import GitInspector, GitSummary
+from coding_agent.interactive_cli import InteractiveCLI
 from coding_agent.model import ModelAdapter
 from coding_agent.registry import ToolRegistry
 from coding_agent.renderer import RichRenderer
@@ -174,13 +175,13 @@ def main() -> int:
 
     task = args.task
 
-    if task is None:
+    if task is None and args.plain:
         try:
             task = input("Task: ").strip()
         except EOFError:
             task = ""
 
-    if not task:
+    if args.plain and not task:
         print(
             "Error: task must not be empty.",
             file=sys.stderr,
@@ -200,6 +201,7 @@ def main() -> int:
             else RichRenderer(
                 workspace_root=workspace,
                 model_name=getattr(model, "model_name", None),
+                trace_enabled=not args.no_trace,
             )
         )
 
@@ -220,6 +222,14 @@ def main() -> int:
                 else None
             ),
         )
+
+        if task is None:
+            return InteractiveCLI(
+                agent=agent,
+                renderer=renderer,
+                workspace=workspace,
+                inspect_git=not args.no_diff,
+            ).run()
 
         result = agent.run(task)
         verification = summarize_verification(
