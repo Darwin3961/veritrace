@@ -4,8 +4,6 @@
 
 ### 一个以执行事实为核心的可验证 Coding Agent
 
-**模型声称完成 ≠ 任务真实完成。VeriTrace 用真实执行证据验证结果。**
-
 <small>Model claims are not execution facts. Verification uses evidence.</small>
 
 VeriTrace 是一个从零实现的轻量级本地 Coding Agent：
