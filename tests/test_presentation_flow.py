@@ -122,7 +122,10 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
                 ]
             ),
             AgentResponse(
-                content="Implemented add(a, b) and verified it.",
+                content=(
+                    "## Result\n\n"
+                    "- **Implemented** `add(a, b)` and verified it."
+                ),
                 finish_reason="stop",
             ),
         ]
@@ -146,7 +149,10 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
         trace_path=agent.last_trace_path,
     )
 
-    assert result == "Implemented add(a, b) and verified it."
+    assert result == (
+        "## Result\n\n"
+        "- **Implemented** `add(a, b)` and verified it."
+    )
     assert (tmp_path / "calc.py").read_text(encoding="utf-8").startswith(
         "def add"
     )
@@ -156,6 +162,7 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
     assert verification.failed_commands == 1
     assert verification.successful_test_commands == 1
     assert verification.failed_test_commands == 1
+    assert verification.tool_failures == 1
     assert git_summary.is_repo is True
     assert "?? calc.py" in git_summary.status_short
     assert "?? tests/" in git_summary.status_short
@@ -168,6 +175,18 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
         range(1, len(trace_events) + 1)
     )
     assert trace_events[-1]["type"] == "session_end"
+    assert sum(
+        event["type"] == "tool_result"
+        and not event["data"].get("ok", False)
+        for event in trace_events
+    ) == 1
+    assistant_events = [
+        event
+        for event in trace_events
+        if event["type"] == "assistant_response"
+        and event["data"].get("content")
+    ]
+    assert assistant_events[-1]["data"]["content"] == result
 
     output = stream.getvalue()
     assert "✦ VeriTrace" in output
@@ -183,10 +202,16 @@ def test_end_to_end_fake_presentation_flow(tmp_path: Path):
     assert "✓ VERIFIED" in output
     assert "Final test run    ✓ passed" in output
     assert "Test history      1 passed · 1 failed" in output
+    assert "Tool failures" not in output
     assert "6 steps · 5 tools" in output
     assert "trace  " in output
-    assert "Changes" in output
+    assert "Workspace changes" in output
+    assert "Workspace changes (including pre-existing changes)" not in output
     assert "Coding Agent Session" not in output
     assert output.count("┌") + output.count("╭") == 2
     assert "Diff\n" not in output
     assert "Regression reproduced" not in output
+    assert "Implemented" in output
+    assert "add(a, b)" in output
+    assert "## Result" not in output
+    assert "**Implemented**" not in output

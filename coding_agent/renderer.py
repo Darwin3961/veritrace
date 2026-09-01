@@ -5,16 +5,19 @@ import platform
 import re
 import shlex
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from rich import box
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
 from coding_agent.events import Event
 from coding_agent.git_utils import GitSummary
+from coding_agent.session import SessionTrace
 from coding_agent.verification import VerificationSummary, _is_test_command
 
 
@@ -54,6 +57,13 @@ def sanitize_display_path(
     return "..." + shortened[-(max_chars - 3):]
 
 
+@dataclass(frozen=True, slots=True)
+class TestCommandPresentation:
+    summary: str
+    node_id: str | None = None
+    error: str | None = None
+
+
 class RichRenderer:
     """Render sanitized agent events without affecting agent execution."""
 
@@ -73,9 +83,31 @@ class RichRenderer:
     SUCCESS_COMMAND_HEAD_LINES = 2
     SUCCESS_COMMAND_TAIL_LINES = 3
     FAILURE_COMMAND_EDGE_LINES = 4
-    FINAL_ANSWER_LINES = 6
+    COMMAND_DETAILS_LINES = 40
+    COMMAND_DETAILS_EDGE_LINES = 20
     COMPACT_DIFF_LINES = 20
     MEDIUM_DIFF_LINES = 60
+
+    PYTEST_COMMAND_PATTERN = re.compile(
+        r"(?:^|[\s;&|])[^\s;&|]*pytest(?:\.exe)?\b",
+        re.IGNORECASE,
+    )
+    PYTEST_SUMMARY_PATTERN = re.compile(
+        r"^\s*=*\s*(?P<counts>"
+        r"\d+\s+(?:passed|failed|skipped|xfailed|xpassed|"
+        r"errors?|warnings?|deselected)"
+        r"(?:,\s*\d+\s+(?:passed|failed|skipped|xfailed|xpassed|"
+        r"errors?|warnings?|deselected))*"
+        r")\s+in\s+(?P<duration>\d+(?:\.\d+)?)s\s*=*\s*$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    PYTEST_NODE_PATTERN = re.compile(
+        r"^FAILED\s+(?P<node>\S+)",
+        re.MULTILINE,
+    )
+    ASSERTION_ERROR_PATTERN = re.compile(
+        r"AssertionError(?:\s*:\s*[^\r\n]*)?",
+    )
 
     TOOL_ACTIONS = {
         "list_files": "List files",
@@ -124,6 +156,7 @@ class RichRenderer:
         self._pending_passive_tools: dict[str, str] = {}
         self._pending_test_commands: set[str] = set()
         self._test_results: list[bool] = []
+        self._failed_test_tool_results = 0
         self._last_test_exit_code: int | None = None
 
     def _supports_unicode(self) -> bool:
@@ -235,11 +268,11 @@ class RichRenderer:
             style="bold bright_white",
         )
         header.append(f"\n{face}  ", style="cyan")
-        header.append("Verifiable Coding Agent", style="dim")
+        header.append("Verifiable Coding Agent", style="bright_cyan")
         header.append("\n\n       ")
 
         if branch:
-            header.append(branch, style="dim cyan")
+            header.append(branch, style="dim")
             header.append(" · ", style="dim")
 
         header.append(
@@ -249,8 +282,8 @@ class RichRenderer:
 
         if self.model_name:
             header.append("\n")
-            model = Text("       model       ", style="dim")
-            model.append(self._inline(self.model_name), style="dim")
+            model = Text("       model       ", style="cyan")
+            model.append(self._inline(self.model_name), style="bright_white")
             header.append_text(model)
 
         if self.workspace_root is not None:
@@ -269,22 +302,22 @@ class RichRenderer:
                 or sanitize_display_path(self.workspace_root, max_chars=40)
             )
             header.append("\n")
-            workspace = Text("       workspace   ", style="dim")
+            workspace = Text("       workspace   ", style="cyan")
             workspace.append(
                 workspace_name,
-                style="dim",
+                style="bright_white",
             )
             header.append_text(workspace)
 
         header.append("\n")
-        safety = Text("       safety      ", style="dim")
-        safety.append("controlled", style="dim cyan")
+        safety = Text("       safety      ", style="cyan")
+        safety.append("controlled", style="bright_yellow")
         header.append_text(safety)
         header.append("\n")
-        trace = Text("       trace       ", style="dim")
+        trace = Text("       trace       ", style="cyan")
         trace.append(
             "enabled" if self.trace_enabled else "disabled",
-            style="dim green" if self.trace_enabled else "dim yellow",
+            style="bright_green" if self.trace_enabled else "bright_yellow",
         )
         header.append_text(trace)
 
@@ -398,13 +431,19 @@ class RichRenderer:
             self._pending_passive_tools[call_id] = label
             return
 
-        line = Text(f"{self._symbol('bullet')} ", style="cyan")
-        line.append(label, style="bold cyan")
+        action_style = (
+            "bold bright_cyan" if name == "run_command" else "bold cyan"
+        )
+        line = Text(
+            f"{self._symbol('bullet')} ",
+            style="bright_cyan" if name == "run_command" else "cyan",
+        )
+        line.append(label, style=action_style)
         self.console.print(line)
 
         if command:
-            command_line = Text("  $ ", style="dim")
-            command_line.append(command)
+            command_line = Text("  $ ", style="cyan")
+            command_line.append(command, style="bright_white")
             self.console.print(command_line)
 
     def _print_indented(self, value: object, *, style: str = "") -> None:
@@ -449,7 +488,130 @@ class RichRenderer:
                 self._truncate_patch_line(
                     line,
                     self.PATCH_LINE_CHARS,
+                ),
+                style="white",
+            )
+            self.console.print(rendered)
+
+    def _parse_test_presentation(
+        self,
+        command: str | None,
+        output: str,
+    ) -> TestCommandPresentation | None:
+        if (
+            not command
+            or not _is_test_command(command)
+            or self.PYTEST_COMMAND_PATTERN.search(command) is None
+        ):
+            return None
+
+        summaries = list(self.PYTEST_SUMMARY_PATTERN.finditer(output))
+
+        if not summaries:
+            return None
+
+        summary_match = summaries[-1]
+        counts = re.split(r",\s*", summary_match.group("counts"))
+        duration = summary_match.group("duration")
+        summary = " · ".join([*counts, f"{duration}s"])
+        node_matches = list(self.PYTEST_NODE_PATTERN.finditer(output))
+        node_id = node_matches[-1].group("node") if node_matches else None
+        assertion_matches = list(
+            self.ASSERTION_ERROR_PATTERN.finditer(output)
+        )
+        detailed_assertion = next(
+            (
+                match.group(0).strip()
+                for match in assertion_matches
+                if ":" in match.group(0)
+            ),
+            None,
+        )
+        error = detailed_assertion or (
+            assertion_matches[-1].group(0).strip()
+            if assertion_matches
+            else None
+        )
+        return TestCommandPresentation(
+            summary=summary,
+            node_id=node_id,
+            error=error,
+        )
+
+    def _render_test_presentation(
+        self,
+        presentation: TestCommandPresentation,
+        *,
+        ok: bool,
+    ) -> None:
+        style = "bold bright_green" if ok else "bold bright_red"
+        symbol = self._symbol("success" if ok else "failure")
+        self.console.print(
+            Text(f"{symbol} {presentation.summary}", style=style)
+        )
+
+        if presentation.node_id:
+            prefix = "  ↳ " if self.unicode_symbols else "  -> "
+            node = Text(prefix, style="cyan")
+            node.append(presentation.node_id, style="white")
+            self.console.print(node)
+
+        if presentation.error:
+            self.console.print(
+                Text(f"  {presentation.error}", style="red")
+            )
+
+    def _safe_detail_text(self, value: object) -> str:
+        text = "" if value is None else str(value)
+
+        for pattern in SessionTrace.SECRET_VALUE_PATTERNS:
+            text = pattern.sub("[REDACTED]", text)
+
+        if self.workspace_root is not None:
+            workspace = str(self.workspace_root)
+            replacement = self.workspace_root.name or "."
+            text = text.replace(workspace, replacement)
+            text = text.replace(
+                self.workspace_root.as_posix(),
+                replacement,
+            )
+
+        try:
+            home = Path.home().resolve()
+        except OSError:
+            return text
+
+        text = text.replace(str(home), "~")
+        return text.replace(home.as_posix(), "~")
+
+    def _print_command_details(self, value: object) -> None:
+        lines = self._safe_detail_text(value).splitlines()
+
+        if len(lines) > self.COMMAND_DETAILS_LINES:
+            edge = self.COMMAND_DETAILS_EDGE_LINES
+            omitted = len(lines) - (edge * 2)
+            visible: list[str | None] = lines[:edge] + [None] + lines[-edge:]
+        else:
+            omitted = 0
+            visible = list(lines)
+
+        for line in visible:
+            if line is None:
+                omission = (
+                    f"  … {omitted} lines omitted …"
+                    if self.unicode_symbols
+                    else f"  ... {omitted} lines omitted ..."
                 )
+                self.console.print(Text(omission, style="dim"))
+                continue
+
+            rendered = Text("  ")
+            rendered.append(
+                self._truncate_patch_line(
+                    line,
+                    self.PATCH_LINE_CHARS,
+                ),
+                style="white",
             )
             self.console.print(rendered)
 
@@ -635,10 +797,11 @@ class RichRenderer:
         if name in self.PASSIVE_TOOLS and isinstance(call_id, str):
             passive_label = self._pending_passive_tools.pop(call_id, None)
 
-        label, _command = self._tool_presentations.pop(
+        label, command = self._tool_presentations.pop(
             event.source_seq or -1,
             self._tool_presentation(name, {}),
         )
+        test_presentation_rendered = False
 
         if (
             name == "run_command"
@@ -656,6 +819,9 @@ class RichRenderer:
                 and not timed_out
                 and not policy_blocked
             )
+
+            if not ok:
+                self._failed_test_tool_results += 1
 
         if name in self.PASSIVE_TOOLS:
             display = passive_label or label
@@ -710,7 +876,24 @@ class RichRenderer:
                 display_parts.append(str(error))
 
             if display_parts:
-                self._print_command_text("\n".join(display_parts), ok=ok)
+                display_text = "\n".join(display_parts)
+                presentation = (
+                    None
+                    if policy_blocked or timed_out
+                    else self._parse_test_presentation(command, display_text)
+                )
+
+                if presentation is None:
+                    self._print_command_text(display_text, ok=ok)
+                else:
+                    command_succeeded = bool(
+                        ok and metadata.get("exit_code") == 0
+                    )
+                    self._render_test_presentation(
+                        presentation,
+                        ok=command_succeeded,
+                    )
+                    test_presentation_rendered = True
 
         if policy_blocked:
             line = Text(
@@ -744,6 +927,9 @@ class RichRenderer:
                 return
 
             if name == "run_command":
+                if test_presentation_rendered:
+                    return
+
                 exit_code = metadata.get("exit_code")
                 completed = (
                     f"exit code {exit_code}"
@@ -758,12 +944,15 @@ class RichRenderer:
             self.console.print(
                 Text(
                     f"{self._symbol('success')} {completed}",
-                    style="bold green",
+                    style="bold bright_green",
                 )
             )
             return
 
         if name == "run_command":
+            if test_presentation_rendered:
+                return
+
             exit_code = metadata.get("exit_code")
             status = (
                 f"Command exited with code {exit_code}"
@@ -773,7 +962,7 @@ class RichRenderer:
             self.console.print(
                 Text(
                     f"{self._symbol('failure')} {status}",
-                    style="bold red",
+                    style="bold bright_red",
                 )
             )
             return
@@ -805,6 +994,7 @@ class RichRenderer:
             self._pending_passive_tools.clear()
             self._pending_test_commands.clear()
             self._test_results.clear()
+            self._failed_test_tool_results = 0
             self._last_test_exit_code = None
 
             if not self.interactive_mode:
@@ -866,6 +1056,7 @@ class RichRenderer:
         summary: GitSummary,
         *,
         include_diff: bool = True,
+        heading: str = "Changes",
     ) -> None:
         if not summary.is_repo:
             if summary.error:
@@ -885,7 +1076,7 @@ class RichRenderer:
             self.console.print(Text("Workspace clean", style="green"))
             return
 
-        self.console.print(Text("Changes", style="bold"))
+        self.console.print(Text(heading, style="bold"))
 
         for line in summary.status_short.splitlines():
             self.console.print(Text(f"  {line}"))
@@ -1076,21 +1267,8 @@ class RichRenderer:
         return " · ".join(parts)
 
     def _render_final_answer(self, result: str) -> None:
-        lines = result.splitlines()
-
-        if len(lines) <= self.FINAL_ANSWER_LINES:
-            visible = lines
-        else:
-            visible = lines[: self.FINAL_ANSWER_LINES]
-            visible.append(
-                "… additional response lines omitted in presentation …"
-                if self.unicode_symbols
-                else "... additional response lines omitted in "
-                "presentation ..."
-            )
-
         self.console.print(Text("Assistant:", style="bold cyan"))
-        self.console.print(Text("\n".join(visible)))
+        self.console.print(Markdown(result))
 
     def _panel_row(
         self,
@@ -1100,8 +1278,8 @@ class RichRenderer:
         *,
         style: str = "",
     ) -> None:
-        body.append(f"{label:<18}", style="dim")
-        body.append(value, style=style)
+        body.append(f"{label:<18}", style="white")
+        body.append(value, style=style or "white")
         body.append("\n")
 
     def _is_verified(
@@ -1130,6 +1308,13 @@ class RichRenderer:
         verified = self._is_verified(
             stop_reason=stop_reason,
             verification=verification,
+        )
+        informational = bool(
+            completed
+            and not verification.tests_likely_ran
+            and verification.successful_file_changes == 0
+            and verification.tool_failures == 0
+            and verification.policy_blocks == 0
         )
         body = Text()
 
@@ -1170,7 +1355,7 @@ class RichRenderer:
                     str(self._last_test_exit_code),
                 )
         elif not verification.tests_likely_ran:
-            self._panel_row(body, "Tests", "not run", style="dim")
+            self._panel_row(body, "Tests", "not run")
 
         if verification.tests_likely_ran:
             history = (
@@ -1184,12 +1369,22 @@ class RichRenderer:
             "Files changed",
             str(verification.successful_file_changes),
         )
-        self._panel_row(
-            body,
-            "Tool failures",
-            str(verification.tool_failures),
-            style="yellow" if verification.tool_failures else "",
-        )
+        presented_tool_failures = verification.tool_failures
+
+        if verified:
+            presented_tool_failures = max(
+                0,
+                presented_tool_failures
+                - self._failed_test_tool_results,
+            )
+
+        if not verified or presented_tool_failures:
+            self._panel_row(
+                body,
+                "Tool failures",
+                str(presented_tool_failures),
+                style="yellow" if presented_tool_failures else "",
+            )
         self._panel_row(
             body,
             "Policy blocks",
@@ -1200,22 +1395,26 @@ class RichRenderer:
             body,
             "Trace",
             "recorded" if trace_path is not None else "disabled",
-            style="green" if trace_path is not None else "dim",
+            style="green" if trace_path is not None else "white",
         )
 
         if verified:
-            body.append("\nSupported by execution evidence.", style="dim green")
-        elif completed and not verification.tests_likely_ran:
+            body.append("\nSupported by execution evidence.", style="green")
+        elif (
+            completed
+            and not verification.tests_likely_ran
+            and not informational
+        ):
             body.append(
                 "\nNo successful test evidence found.",
-                style="dim yellow",
+                style="yellow",
             )
 
         metric_text = self._format_metrics(metrics)
 
         if metric_text:
             body.append("\n")
-            body.append(metric_text, style="dim")
+            body.append(metric_text, style="grey70")
 
         if verified:
             title = Text(
@@ -1299,6 +1498,104 @@ class RichRenderer:
             )
 
         return actions
+
+    def render_command_details(self, events: list[Event]) -> None:
+        calls = {
+            event.seq: event
+            for event in events
+            if event.type == "tool_call"
+        }
+
+        for result in reversed(events):
+            if (
+                result.type != "tool_result"
+                or result.data.get("tool_name") != "run_command"
+            ):
+                continue
+
+            call = calls.get(result.source_seq or -1)
+
+            if call is None or call.data.get("name") != "run_command":
+                continue
+
+            arguments = call.data.get("arguments", {})
+
+            if not isinstance(arguments, dict):
+                arguments = {}
+
+            command = self._safe_detail_text(arguments.get("command", ""))
+            heading = Text("Command details ", style="bold cyan")
+            heading.append(self._symbol("separator") * 16, style="dim")
+            self.console.print(heading)
+            command_line = Text("  $ ", style="cyan")
+            command_line.append(command, style="bright_white")
+            self.console.print(command_line)
+
+            output = result.data.get("output", "")
+            error = result.data.get("error")
+            metadata = result.data.get("metadata", {})
+
+            if not isinstance(metadata, dict):
+                metadata = {}
+
+            fallback_error = (
+                f"command exited with code {metadata.get('exit_code')}"
+            )
+            parts: list[str] = []
+
+            if output:
+                parts.append(str(output))
+
+            if (
+                error
+                and str(error).strip().lower() != fallback_error
+            ):
+                parts.append(str(error))
+
+            if parts:
+                self.console.print()
+                self._print_command_details("\n".join(parts))
+
+            timed_out = bool(metadata.get("timeout", False))
+            policy_blocked = bool(metadata.get("policy_blocked", False))
+            ok = bool(result.data.get("ok", False))
+            exit_code = metadata.get("exit_code")
+
+            if timed_out:
+                status = Text(
+                    f"{self._symbol('warning')} command timed out",
+                    style="bold yellow",
+                )
+            elif policy_blocked:
+                status = Text(
+                    f"{self._symbol('warning')} blocked by policy",
+                    style="bold yellow",
+                )
+            elif ok:
+                detail = (
+                    f"exit code {exit_code}"
+                    if isinstance(exit_code, int)
+                    else "command completed"
+                )
+                status = Text(
+                    f"{self._symbol('success')} {detail}",
+                    style="bold bright_green",
+                )
+            else:
+                detail = (
+                    f"exit code {exit_code}"
+                    if isinstance(exit_code, int)
+                    else "command failed"
+                )
+                status = Text(
+                    f"{self._symbol('failure')} {detail}",
+                    style="bold bright_red",
+                )
+
+            self.console.print(status)
+            return
+
+        self.render_notice("No command details available yet.")
 
     def render_trace(
         self,
@@ -1440,12 +1737,29 @@ class RichRenderer:
             trace_path=trace_path,
         )
 
-        if git_summary is not None:
+        if (
+            git_summary is not None
+            and verification.successful_file_changes > 0
+        ):
             self.console.print()
-            self.render_git_summary(git_summary, include_diff=False)
+            self.render_git_summary(
+                git_summary,
+                include_diff=False,
+                heading="Workspace changes",
+            )
 
         if trace_path is not None:
             self.console.print()
-            trace = Text("trace  ", style="dim")
-            trace.append(sanitize_display_path(trace_path), style="dim")
+            trace = Text(
+                "Trace  " if self.interactive_mode else "trace  ",
+                style="dim",
+            )
+
+            if self.interactive_mode:
+                trace.append("recorded", style="green")
+                trace.append(" · ", style="dim")
+                trace.append("/trace", style="cyan")
+            else:
+                trace.append(sanitize_display_path(trace_path), style="dim")
+
             self.console.print(trace)

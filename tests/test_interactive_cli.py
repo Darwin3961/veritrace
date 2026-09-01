@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from prompt_toolkit.document import Document
 
 from coding_agent.events import Event
@@ -75,16 +74,17 @@ class FakeRenderer:
         return record
 
 
-@pytest.mark.parametrize(
-    ("prefix", "expected"),
-    [("/st", "/status"), ("/v", "/verify"), ("/tr", "/trace")],
-)
-def test_slash_completer_expands_known_prefixes(prefix, expected):
-    completions = list(
-        SlashCommandCompleter().get_completions(Document(prefix), None)
-    )
-
-    assert [completion.text for completion in completions] == [expected]
+def test_slash_completer_expands_known_prefixes():
+    for prefix, expected in (
+        ("/st", "/status"),
+        ("/v", "/verify"),
+        ("/tr", "/trace"),
+        ("/d", "/details"),
+    ):
+        completions = list(
+            SlashCommandCompleter().get_completions(Document(prefix), None)
+        )
+        assert [completion.text for completion in completions] == [expected]
 
 
 def make_cli(values, tmp_path):
@@ -114,7 +114,10 @@ def test_help_and_status_do_not_call_agent(tmp_path):
 
 
 def test_verify_and_trace_without_history_are_safe(tmp_path):
-    cli, agent, renderer = make_cli(["/verify", "/trace", "/exit"], tmp_path)
+    cli, agent, renderer = make_cli(
+        ["/verify", "/trace", "/details", "/exit"],
+        tmp_path,
+    )
 
     assert cli.run() == 0
     assert agent.tasks == []
@@ -126,6 +129,7 @@ def test_verify_and_trace_without_history_are_safe(tmp_path):
     assert notices == [
         "No verification evidence yet.",
         "No execution trace yet.",
+        "No command details available yet.",
     ]
 
 
@@ -143,7 +147,7 @@ def test_normal_task_runs_once_and_saves_last_run(tmp_path):
 
 def test_verify_and_trace_project_the_last_run(tmp_path):
     cli, agent, renderer = make_cli(
-        ["Run the tests", "/verify", "/trace", "/exit"],
+        ["Run the tests", "/verify", "/trace", "/details", "/exit"],
         tmp_path,
     )
 
@@ -151,6 +155,10 @@ def test_verify_and_trace_project_the_last_run(tmp_path):
     assert agent.tasks == ["Run the tests"]
     assert "render_verification" in call_names(renderer)
     assert "render_trace" in call_names(renderer)
+    assert "render_command_details" in call_names(renderer)
+    assert cli.last_run is not None
+    assert cli.last_run.metrics == {"tool_calls": 1, "steps": 2}
+    assert len(cli.last_run.events) == 2
 
 
 def test_repl_runs_each_task_as_an_independent_agent_call(tmp_path):

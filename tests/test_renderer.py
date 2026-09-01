@@ -717,6 +717,171 @@ def test_successful_command_output_keeps_summary_with_tighter_limit():
     assert "✓ exit code 0" in rendered
 
 
+def test_pytest_output_uses_safe_summary_or_bounded_fallback():
+    def render(command, output, *, ok, exit_code):
+        renderer, stream = make_renderer()
+        call = make_event(
+            "tool_call",
+            seq=1,
+            data={
+                "call_id": "command-call",
+                "name": "run_command",
+                "arguments": {"command": command},
+            },
+        )
+        result = make_event(
+            "tool_result",
+            seq=2,
+            source_seq=1,
+            data={
+                "call_id": "command-call",
+                "tool_name": "run_command",
+                "ok": ok,
+                "output": output,
+                "metadata": {"exit_code": exit_code, "timeout": False},
+            },
+        )
+        original = result.to_dict()
+        renderer.handle_event(call)
+        renderer.handle_event(result)
+        assert result.to_dict() == original
+        return stream.getvalue()
+
+    failure = (
+        "...F..... [100%]\n"
+        "================ FAILURES ================\n"
+        "E AssertionError: 0 != 1\n"
+        "================ short test summary info ================\n"
+        "FAILED tests/test_growth.py::GrowthTests::"
+        "test_growth_advances_and_stops_at_final_stage - AssertionError\n"
+        "1 failed, 8 passed in 0.04s"
+    )
+    rendered = render(
+        "python -m pytest -q",
+        failure,
+        ok=False,
+        exit_code=1,
+    )
+    assert "1 failed · 8 passed · 0.04s" in rendered
+    assert (
+        "tests/test_growth.py::GrowthTests::"
+        "test_growth_advances_and_stops_at_final_stage" in rendered
+    )
+    assert "AssertionError: 0 != 1" in rendered
+    assert "FAILURES" not in rendered
+    assert "short test summary info" not in rendered
+    assert "lines omitted" not in rendered
+    assert "Command exited" not in rendered
+
+    rendered = render(
+        "pytest -q",
+        "......... [100%]\n9 passed in 0.03s",
+        ok=True,
+        exit_code=0,
+    )
+    assert "9 passed · 0.03s" in rendered
+    assert "[100%]" not in rendered
+    assert "exit code 0" not in rendered
+
+    rendered = render(
+        "python -m pytest -q",
+        ".........s [100%]\n9 passed, 1 skipped in 0.05s",
+        ok=True,
+        exit_code=0,
+    )
+    assert "9 passed · 1 skipped · 0.05s" in rendered
+
+    rendered = render(
+        "pytest -q",
+        "9 passed in 0.03s",
+        ok=True,
+        exit_code=7,
+    )
+    assert "✗ 9 passed · 0.03s" in rendered
+    assert "✓ 9 passed · 0.03s" not in rendered
+
+    unparsed = "\n".join(f"raw-line-{index}" for index in range(18))
+    rendered = render(
+        "python -m pytest -q",
+        unparsed,
+        ok=False,
+        exit_code=7,
+    )
+    assert "raw-line-0" in rendered
+    assert "10 lines omitted" in rendered
+    assert "raw-line-17" in rendered
+    assert "Command exited with code 7" in rendered
+
+
+def test_command_details_projects_latest_event_without_mutation(tmp_path):
+    renderer, stream = make_renderer(workspace_root=tmp_path)
+    events = [
+        make_event(
+            "tool_call",
+            seq=1,
+            data={
+                "name": "run_command",
+                "arguments": {"command": "python first.py"},
+            },
+        ),
+        make_event(
+            "tool_result",
+            seq=2,
+            source_seq=1,
+            data={
+                "tool_name": "run_command",
+                "ok": True,
+                "output": "FIRST_COMMAND_OUTPUT",
+                "metadata": {"exit_code": 0},
+            },
+        ),
+        make_event(
+            "tool_call",
+            seq=3,
+            data={
+                "name": "run_command",
+                "arguments": {"command": "python latest.py"},
+            },
+        ),
+        make_event(
+            "tool_result",
+            seq=4,
+            source_seq=3,
+            data={
+                "tool_name": "run_command",
+                "ok": False,
+                "output": (
+                    f"workspace={tmp_path}\n"
+                    "token=sk-DETAIL_SECRET_1234\nLATEST_COMMAND_OUTPUT"
+                ),
+                "error": "command exited with code 9",
+                "metadata": {"exit_code": 9},
+            },
+        ),
+    ]
+    original = [event.to_dict() for event in events]
+
+    renderer.render_command_details(events)
+
+    output = stream.getvalue()
+    assert "Command details" in output
+    assert "$ python latest.py" in output
+    assert "LATEST_COMMAND_OUTPUT" in output
+    assert "FIRST_COMMAND_OUTPUT" not in output
+    assert "[REDACTED]" in output
+    assert "sk-DETAIL_SECRET_1234" not in output
+    assert str(tmp_path) not in output
+    assert "exit code 9" in output
+    assert [event.to_dict() for event in events] == original
+
+    empty_renderer, empty_stream = make_renderer()
+    empty_renderer.render_command_details([])
+    assert (
+        empty_stream.getvalue().strip()
+        == "No command details available yet."
+    )
+
+
 def test_empty_command_output_is_not_rendered():
     renderer, stream = make_renderer()
     renderer.handle_event(
@@ -946,7 +1111,7 @@ def test_final_summary_is_compact_safe_and_does_not_invent_tests(tmp_path):
     assert "trace  " in output
     assert "trace.jsonl" in output
     assert Path.home().name not in output
-    assert "Workspace clean" in output
+    assert "Workspace clean" not in output
     assert "All tests passed" not in output
     assert "Result" not in output
     assert "┌" in output or "╭" in output
@@ -1061,7 +1226,36 @@ def test_final_test_run_is_separate_from_complete_test_history():
     renderer, stream = make_renderer(show_tool_output=False)
     record_test_result(renderer, seq=1, call_id="failed", ok=False)
     record_test_result(renderer, seq=3, call_id="passed", ok=True)
+    metrics = {"tool_failures": 1}
+    verification = VerificationSummary(
+        successful_commands=1,
+        failed_commands=1,
+        tool_failures=1,
+        tests_likely_ran=True,
+        successful_test_commands=1,
+        failed_test_commands=1,
+    )
 
+    renderer.render_final(
+        result="Done.",
+        metrics=metrics,
+        stop_reason="completed",
+        verification=verification,
+        git_summary=None,
+        trace_path=None,
+    )
+
+    output = stream.getvalue()
+    assert "Final test run    ✓ passed" in output
+    assert "Test history      1 passed · 1 failed" in output
+    assert "Tool failures" not in output
+    assert "Regression reproduced" not in output
+    assert metrics["tool_failures"] == 1
+    assert verification.tool_failures == 1
+
+    renderer, stream = make_renderer(show_tool_output=False)
+    record_test_result(renderer, seq=1, call_id="failed", ok=False)
+    record_test_result(renderer, seq=3, call_id="passed", ok=True)
     renderer.render_final(
         result="Done.",
         metrics={},
@@ -1069,6 +1263,7 @@ def test_final_test_run_is_separate_from_complete_test_history():
         verification=VerificationSummary(
             successful_commands=1,
             failed_commands=1,
+            tool_failures=2,
             tests_likely_ran=True,
             successful_test_commands=1,
             failed_test_commands=1,
@@ -1077,11 +1272,7 @@ def test_final_test_run_is_separate_from_complete_test_history():
         trace_path=None,
     )
 
-    output = stream.getvalue()
-    assert "Final test run    ✓ passed" in output
-    assert "Test history      1 passed · 1 failed" in output
-    assert "Tool failures" in output
-    assert "Regression reproduced" not in output
+    assert "Tool failures     1" in stream.getvalue()
 
 
 def test_last_structured_test_failure_is_displayed_as_final_failure():
@@ -1107,11 +1298,19 @@ def test_last_structured_test_failure_is_displayed_as_final_failure():
     output = stream.getvalue()
     assert "Final test run    ✗ failed" in output
     assert "Test history      1 passed · 1 failed" in output
+    assert "VERIFIED" not in output
 
 
-def test_long_final_answer_is_shortened_only_for_rich_presentation():
+def test_long_final_answer_is_complete_in_rich_presentation():
     renderer, stream = make_renderer()
-    result = "\n".join(f"final-line-{index}" for index in range(10))
+    result = (
+        "## 修复结果\n\n"
+        "- **根因**：`advance_stage` 更新方向错误\n"
+        "- **修改**：改为 `stage + 1`\n\n"
+        "1. 运行测试\n"
+        "2. 检查结果\n\n"
+        "```python\nreturn stage + 1\n```"
+    )
 
     renderer.render_final(
         result=result,
@@ -1123,11 +1322,16 @@ def test_long_final_answer_is_shortened_only_for_rich_presentation():
     )
 
     output = stream.getvalue()
-    assert "final-line-0" in output
-    assert "final-line-5" in output
-    assert "final-line-6" not in output
-    assert "additional response lines omitted in presentation" in output
-    assert result.endswith("final-line-9")
+    assert "修复结果" in output
+    assert "根因" in output
+    assert "advance_stage" in output
+    assert "运行测试" in output
+    assert "return stage + 1" in output
+    assert "##" not in output
+    assert "**" not in output
+    assert "```" not in output
+    assert "additional response lines omitted in presentation" not in output
+    assert result.startswith("## 修复结果")
 
 
 def test_git_status_and_diff_are_borderless_and_markup_safe():
@@ -1291,12 +1495,23 @@ def test_interactive_mode_suppresses_per_task_header_and_task_echo(tmp_path):
     renderer.handle_event(
         make_event("user_task", seq=2, data={"task": "private task text"})
     )
+    trace_path = tmp_path / "traces" / "private-session.jsonl"
+    renderer.render_final(
+        result="Done.",
+        metrics={},
+        stop_reason="completed",
+        verification=VerificationSummary(),
+        git_summary=None,
+        trace_path=trace_path,
+    )
 
     output = stream.getvalue()
     assert output.count("VeriTrace") == 1
     assert "private task text" not in output
     assert "\\|/" in output
     assert "(•◡•)" in output
+    assert "Trace  recorded · /trace" in output
+    assert "private-session.jsonl" not in output
 
 
 def test_non_tty_thinking_status_is_silent():
@@ -1395,6 +1610,19 @@ def test_completed_without_test_evidence_is_not_verified():
     output = stream.getvalue()
     assert "Task completed" in output
     assert "VERIFIED" not in output
+    assert "No successful test evidence found." not in output
+
+    renderer, stream = make_renderer()
+    renderer.render_verification(
+        metrics={},
+        stop_reason="completed",
+        verification=VerificationSummary(successful_file_changes=1),
+        trace_path=None,
+    )
+
+    output = stream.getvalue()
+    assert "Task completed" in output
+    assert "VERIFIED" not in output
     assert "No successful test evidence found." in output
 
 
@@ -1443,27 +1671,44 @@ def test_trace_projection_is_bounded_and_does_not_dump_json(tmp_path):
 
 def test_final_git_summary_omits_patch_after_live_edit_preview():
     renderer, stream = make_renderer()
+    pre_existing = GitSummary(
+        is_repo=True,
+        status_short=" M app.py",
+        diff_stat="1 file changed, 1 insertion(+), 1 deletion(-)",
+        diff_text=(
+            "diff --git a/app.py b/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new"
+        ),
+    )
     renderer.render_final(
         result="Done.",
         metrics={},
         stop_reason="completed",
         verification=VerificationSummary(),
-        git_summary=GitSummary(
-            is_repo=True,
-            status_short=" M app.py",
-            diff_stat="1 file changed, 1 insertion(+), 1 deletion(-)",
-            diff_text=(
-                "diff --git a/app.py b/app.py\n"
-                "@@ -1 +1 @@\n"
-                "-old\n"
-                "+new"
-            ),
-        ),
+        git_summary=pre_existing,
         trace_path=None,
     )
 
     output = stream.getvalue()
-    assert "Changes" in output
+    assert "Workspace changes" not in output
+    assert "M app.py" not in output
+
+    renderer, stream = make_renderer()
+    renderer.render_final(
+        result="Done.",
+        metrics={},
+        stop_reason="completed",
+        verification=VerificationSummary(successful_file_changes=1),
+        git_summary=pre_existing,
+        trace_path=None,
+    )
+
+    output = stream.getvalue()
+    assert "Workspace changes" in output
+    assert "Workspace changes (including pre-existing changes)" not in output
+    assert "M app.py" in output
     assert "1 file changed · +1 -1" in output
     assert "- old" not in output
     assert "+ new" not in output

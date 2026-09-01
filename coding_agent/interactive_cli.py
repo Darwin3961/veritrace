@@ -22,6 +22,7 @@ COMMANDS = {
     "/status": "Show current session status",
     "/trace": "Show last execution trace",
     "/verify": "Show last verification evidence",
+    "/details": "Show last command details",
     "/clear": "Clear the screen",
     "/exit": "Exit VeriTrace",
 }
@@ -168,6 +169,15 @@ class InteractiveCLI:
                 self.renderer.render_notice("No execution trace yet.")
             else:
                 self.renderer.render_trace(state.events, state.trace_path)
+            return True
+
+        if command == "/details":
+            if state is None:
+                self.renderer.render_notice(
+                    "No command details available yet."
+                )
+            else:
+                self.renderer.render_command_details(state.events)
             return True
 
         self.renderer.render_notice(

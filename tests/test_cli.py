@@ -258,6 +258,13 @@ def test_cli_plain_mode_prints_complete_summary(
     capsys,
 ):
     install_fakes(monkeypatch)
+    original_run = FakeAgentLoop.run
+
+    def run_with_markdown(self, task):
+        original_run(self, task)
+        return "## Plain result\n\n- **kept** as `raw Markdown`"
+
+    monkeypatch.setattr(FakeAgentLoop, "run", run_with_markdown)
     trace_dir = tmp_path / "custom-traces"
     monkeypatch.setattr(
         sys,
@@ -279,7 +286,8 @@ def test_cli_plain_mode_prints_complete_summary(
 
     assert FakeRenderer.instances == []
     assert agent.event_sink is None
-    assert "CLI completed." in output
+    assert "## Plain result" in output
+    assert "- **kept** as `raw Markdown`" in output
     assert f"Trace: {trace_dir / 'session.jsonl'}" in output
     assert "Metrics: steps=2 model_calls=2" in output
     assert "Verification: commands_succeeded=1" in output
